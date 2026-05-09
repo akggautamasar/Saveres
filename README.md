@@ -1,21 +1,18 @@
 <h1 align="center">Save Restricted Content Bot</h1>
 
 <p align="center">
-  <em>An advanced, highly optimized Telegram bot to download restricted content (photos, videos, audio, documents) from private chats or channels, featuring custom routing, batch filtering, and interactive UI.</em>
+  <em>An advanced, highly optimized Telegram bot to download restricted media from private chats, featuring custom routing, batch filtering. Also added auto-forwarding support.</em>
 </p>
 <hr>
 
 ## ✨ Features
 
-- 📥 **Media Extraction:** Download photos, videos, audio files, and documents from highly restricted sources.
-- ⚡ **Auto-Forwarding:** Lightning-fast, nameless content cloning between unrestricted channels bypassing normal UI limits.
-- ✂️ **Interactive Caption Editing:** Dynamically strip unwanted text, promotional junk, or specific lines from captions with smart space-cleanup before batching.
-- 🚀 **Custom Routing:** Option to route batch downloads directly to a target channel or group.
+- 📥 **Media Extraction:** Download media from restricted chats.
+- ⚡ **Auto-Forwarding:** Auto-forward media bypassing the UI limit (100 messages).
+- ✂️ **Custom Caption:** Dynamically strip unwanted text from captions.
+- 🚀 **Custom Routing:** Option to route batch downloads directly to a target channel/group.
 - 🔍 **Media Filtering:** Grab specific media types during batch processes (e.g., only `video` or `doc`).
-- ✅ **Media Group Support:** Flawlessly handles and processes multiple files sent as an album/media group.
 - 🔄 **Live Progress:** Real-time progress tracking for single files and batch operations.
-- 🛡️ **Caption Cleaner:** Automatically detects and completely strips promotional URLs and Telegram links from captions.
-- 🎛️ **Smart Button Extraction:** Safely detects and preserves inline keyboard buttons containing YouTube links from the original posts.
 - ⏱️ **Dynamic Rate Limiting:** Built-in sliding-window logic dynamically pauses rapid processing to avoid Telegram API FloodWaits.
 
 ## 📋 Requirements
@@ -54,29 +51,31 @@ Follow these steps for a quick cloud deployment:
 
 
 ## 📖 Usage & Commands
-`/start` – Check if the bot is alive and view basic info.
+`/start` - Check if the bot is alive and view basic info.
 
-`/help` – Show detailed instructions and command syntax.
+`/help` - Show detailed instructions and command syntax.
 
-`/dl <post_URL>` (or just paste a link) – Fetch media/text from a single Telegram post.
+`/dl <post_URL>` (or just paste a link) - Fetch media from a single post.
 
-`/batch <start_link> <end_link> [filter]` – Fetch a range of posts. The bot will ask if you want to send the media to the Bot Chat or a Custom Channel.
+`/batch <start_link> <end_link> [filter]` - Fetch a range of posts. The bot will ask if you want to send the media to the Bot Chat or a Custom Channel.
 
-Filters available: video, doc, photo, audio, or leave blank for all.
+Filters available: video, doc, photo, audio, or leave blank for ALL.
 
 💡 Example: `/batch https://t.me/mychannel/100 https://t.me/mychannel/120 video`
 
 ⚠️ Note: If routing to a custom channel, the bot must be an Administrator with 'Post Messages' rights in the target channel.
 
-`/stop` – Cancel any active tasks
+`/autoforward <from_chat_link> <to_chat_link>` - Auto-forward messages bypassing the UI limits (100 messages)
 
-`/stats` – View bot stats
+`/stop` - Cancel any active tasks
 
-`/logs` – Downloads the logs.txt file
+`/stats` - View bot stats
+
+`/logs` - Downloads the logs.txt file
 
 🔒 Important: Your user session account MUST be a member of the source chat/channel you are trying to download from, or the bot will not be able to access the messages.
 
-🛡️ Security: To prevent spam, the bot automatically removes external URLs, t.me links, and trailing spaces from captions. Additionally, when using /batch or /autoforward, an interactive menu lets you easily strip specific promotional text or trim lines across all captions.
+🛡️ Security: To prevent spam, the bot automatically removes external URLs, t.me links, and trailing spaces from captions.
 
 ## 🤝 Acknowledgment and Credits
 This project originally began utilizing the base code from [RestrictedContentDL](https://github.com/bisnuray/RestrictedContentDL) authored by Bisnu Ray.

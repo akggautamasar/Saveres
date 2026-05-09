@@ -7,12 +7,14 @@
 
 ## ✨ Features
 
-- 📥 **Media Extraction:** Download photos, videos, audio files, and documents from restricted sources.
-- 🚀 **Auto-Forward to Channels:** Option to route batch downloads directly to a target channel.
-- 🔍 **Media Filtering:** Grab specific media types during batch process (e.g., only `video` or `doc`).
+- 📥 **Media Extraction:** Download photos, videos, audio files, and documents from highly restricted sources.
+- ⚡ **Auto-Forwarding:** Lightning-fast, nameless content cloning between unrestricted channels bypassing normal UI limits.
+- ✂️ **Interactive Caption Editing:** Dynamically strip unwanted text, promotional junk, or specific lines from captions with smart space-cleanup before batching.
+- 🚀 **Custom Routing:** Option to route batch downloads directly to a target channel or group.
+- 🔍 **Media Filtering:** Grab specific media types during batch processes (e.g., only `video` or `doc`).
 - ✅ **Media Group Support:** Flawlessly handles and processes multiple files sent as an album/media group.
 - 🔄 **Live Progress:** Real-time progress tracking for single files and batch operations.
-- 🛡️ **Caption Cleaner:** Automatically defangs links and usernames in text/captions (by injecting `[REMOVE]`) to prevent accidental clicks.
+- 🛡️ **Caption Cleaner:** Automatically detects and completely strips promotional URLs and Telegram links from captions.
 - 🎛️ **Smart Button Extraction:** Safely detects and preserves inline keyboard buttons containing YouTube links from the original posts.
 - ⏱️ **Dynamic Rate Limiting:** Built-in sliding-window logic dynamically pauses rapid processing to avoid Telegram API FloodWaits.
 
@@ -74,7 +76,7 @@ Filters available: video, doc, photo, audio, or leave blank for all.
 
 🔒 Important: Your user session account MUST be a member of the source chat/channel you are trying to download from, or the bot will not be able to access the messages.
 
-🛡️ Security: To protect against spam and unintended redirects, all external URLs, Telegram links and usernames found in captions are defanged by injecting a `[REMOVE]` tag. If you need to access the link, copy the text, trime the `[REMOVE]` tag, and paste it into your browser.
+🛡️ Security: To prevent spam, the bot automatically removes external URLs, t.me links, and trailing spaces from captions. Additionally, when using /batch or /autoforward, an interactive menu lets you easily strip specific promotional text or trim lines across all captions.
 
 ## 🤝 Acknowledgment and Credits
 This project originally began utilizing the base code from [RestrictedContentDL](https://github.com/bisnuray/RestrictedContentDL) authored by Bisnu Ray.

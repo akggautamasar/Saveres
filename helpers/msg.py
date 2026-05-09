@@ -28,7 +28,19 @@ def apply_caption_rules(caption: str, rule: str) -> str:
         lines = lines[:-2]
     elif rule.startswith("remove_text:"):
         text_to_remove = rule.split("remove_text:", 1)[1]
-        return caption.replace(text_to_remove, "").strip()
+        
+        caption = caption.replace(text_to_remove, "")
+        
+        cleaned_lines = []
+        for line in caption.split('\n'):
+            line = re.sub(r' {2,}', ' ', line)
+            line = re.sub(r' \.', '.', line)
+            line = line.strip()
+            
+            if line:
+                cleaned_lines.append(line)
+                
+        return '\n'.join(cleaned_lines)
     
     return '\n'.join(lines).strip()
 

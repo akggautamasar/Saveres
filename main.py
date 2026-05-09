@@ -88,7 +88,7 @@ async def start(_, message: Message):
         "⚙️ **How to use:**\n"
         "• Just send me any Telegram post link!\n"
         "• Use `/help` to see all commands & examples.\n\n"
-        "⚠️ *Note: Make sure your user client is already a member of the target chat.*"
+        "⚠️ Note: Make sure your user client is already a member of the target chat."
     )
     await message.reply(welcome_text, disable_web_page_preview=True)
 
@@ -97,13 +97,13 @@ async def help_command(_, message: Message):
     help_text = (
         "💡 **Bot Commands & Usage Guide**\n\n"
         "📥 **Single Posts**\n"
-        "• Paste any Telegram link directly, or use:\n"
+        "• Paste any restricted post link directly, or use:\n"
         "`/dl <post_link>`\n\n"
         "📦 **Batch Downloads**\n"
-        "• Download a range of posts with optional media filters:\n"
+        "• Download a range of restricted posts with optional media filters:\n"
         "`/batch <start_url> <end_url> [filter]`\n"
-        "• *Filters:* `video`, `doc`, `photo`, `audio`\n"
-        "• *Example:* `/batch .../10 .../20 video`\n\n"
+        "• Filters: `video`, `doc`, `photo`, `audio`\n"
+        "• Example: `/batch .../10 .../20 video`\n\n"
         "⚡ **Auto-Forwarding**\n"
         "`/autoforward <from_chat_link> <to_chat_link>`\n\n"
         "✍️ **Caption Editing**\n"
@@ -147,7 +147,7 @@ async def download_range(bot: Client, message: Message):
         [InlineKeyboardButton("Bot Chat", callback_data=f"batch_bot_{message.id}"),
          InlineKeyboardButton("Channel", callback_data=f"batch_chan_{message.id}")]
     ])
-    await message.reply("**Where do you want to forward the media?**", reply_markup=keyboard)
+    await message.reply("Where do you want to forward the media?", reply_markup=keyboard)
 
 @bot.on_callback_query(filters.regex(r"^batch_(bot|chan)_(\d+)$"))
 async def batch_destination_callback(bot: Client, callback_query: CallbackQuery):
@@ -165,7 +165,7 @@ async def batch_destination_callback(bot: Client, callback_query: CallbackQuery)
         await trigger_caption_setup(bot, user, callback_query.message, job)
     elif action == "chan":
         WAITING_FOR_DEST[callback_query.from_user.id] = job
-        await job["original_message"].reply("**🔗 Please send a post link from the target channel.**")
+        await job["original_message"].reply("🔗 Please send any post link from the target channel.")
 
 @bot.on_message(filters.command(["autoforward"]) & filters.private)
 async def auto_forward_init(bot: Client, message: Message):
@@ -191,7 +191,7 @@ async def auto_forward_init(bot: Client, message: Message):
     }
     
     WAITING_FOR_DEST[message.from_user.id] = job
-    await message.reply("**🔗 Please send a post link from the target channel.**")
+    await message.reply("🔗 Please send a post link from the target channel.")
 
 @bot.on_callback_query(filters.regex(r"^cap_(rm1|rm2|done)_(\d+)$"))
 async def caption_rule_callback(bot: Client, callback_query: CallbackQuery):
@@ -224,7 +224,7 @@ async def caption_rule_callback(bot: Client, callback_query: CallbackQuery):
     rules_count = len(job["caption_rules"])
     text = (
         f"**Current Caption:**\n\n`{job['sample_caption'][:300]}...`\n\n"
-        "🛠️ Chain multiple rules! Reply with the exact text you want deleted.\n\n"
+        "🔄 Want to clean up a caption? Just reply to the message with the exact text you'd like to remove!\n\n"
         f"> 🎯 **Active Rules:** {rules_count} applied"
     )
     
@@ -259,7 +259,7 @@ async def handle_any_message(bot: Client, message: Message):
         rules_count = len(job["caption_rules"])
         text = (
             f"**Current Caption:**\n\n`{job['sample_caption'][:300]}...`\n\n"
-            "🛠️ Chain multiple rules! Reply with the exact text you want deleted.\n\n"
+            "🔄 Want to clean up a caption? Just reply to the message with the exact text you'd like to remove!\n\n"
             f"> 🎯 **Active Rules:** {rules_count} applied"
         )
         try:
@@ -275,7 +275,7 @@ async def handle_any_message(bot: Client, message: Message):
             )
         except Exception: pass
         
-        await message.reply("✅ **Text rule added.** You can type more words to remove, or click **Done** on the menu above.")
+        await message.reply("✅ **Text rule added.** You can add more text to remove, or click **Done** on the menu above.")
         return
 
     if re.search(r"t\.me\/", message.text):
@@ -303,10 +303,10 @@ async def stats(_, message: Message):
     
     await message.reply(
         "**Bot's Live and Running Successfully.**\n\n"
-        f"**➜ Uptime:** {currentTime} | **Mem:** {proc_mem} MiB\n"
-        f"**➜ Free Disk:** {free} of {total}\n"
-        f"**➜ Traffic:** 🔼 {sent} | 🔽 {recv}\n"
-        f"**➜ System:** CPU: {cpuUsage}% | RAM: {memory}% | DISK: {disk}%"
+        f"**Uptime:** {currentTime} | **Mem:** {proc_mem} MiB\n"
+        f"**Free Disk:** {free} of {total}\n"
+        f"**Traffic:** 🔼 {sent} | 🔽 {recv}\n"
+        f"**System:** CPU: {cpuUsage}% | RAM: {memory}% | DISK: {disk}%"
     )
 
 @bot.on_message(filters.command("logs") & filters.private)

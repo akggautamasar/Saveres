@@ -10,39 +10,38 @@ PREFIX_NUM_SPACE_RE = re.compile(r'^\d+ ')
 def clean_caption(caption: str) -> str:
     if not caption:
         return ""
-    pattern = r'(https?://|www\.|t\.me/|telegram\.me/|chat\.whatsapp\.com/|@)(\w\S*)\s*'
+    
+    caption = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', caption)
+    caption = re.sub(r'\]\([^)]+\)', '', caption)
+    pattern = r'(?:https?://|www\.|t\.me/|telegram\.me/|chat\.whatsapp\.com/|@)\S+'
     caption = re.sub(pattern, '', caption, flags=re.IGNORECASE)
+    caption = re.sub(r'https?://\s*', '', caption, flags=re.IGNORECASE)
     
     return caption.strip()
 
-def apply_caption_rules(caption: str, rule: str) -> str:
+def apply_caption_rules(caption: str, rules: list) -> str:
     if not caption: 
         return ""
-    if rule == "keep": 
-        return caption
     
-    lines = caption.split('\n')
-    if rule == "remove_1" and len(lines) > 0:
-        lines = lines[:-1]
-    elif rule == "remove_2" and len(lines) > 1:
-        lines = lines[:-2]
-    elif rule.startswith("remove_text:"):
-        text_to_remove = rule.split("remove_text:", 1)[1]
-        
-        caption = caption.replace(text_to_remove, "")
-        
-        cleaned_lines = []
-        for line in caption.split('\n'):
-            line = re.sub(r' {2,}', ' ', line)
-            line = re.sub(r' \.', '.', line)
-            line = line.strip()
+    for rule in rules:
+        if rule == "keep": 
+            continue
             
-            if line:
-                cleaned_lines.append(line)
-                
-        return '\n'.join(cleaned_lines)
-    
-    return '\n'.join(lines).strip()
+        lines = caption.split('\n')
+        
+        if rule == "remove_1" and len(lines) > 0:
+            caption = '\n'.join(lines[:-1]).strip()
+        elif rule == "remove_2" and len(lines) > 1:
+            caption = '\n'.join(lines[:-2]).strip()
+        elif rule.startswith("remove_text:"):
+            text_to_remove = rule.split("remove_text:", 1)[1]
+            caption = caption.replace(text_to_remove, "")
+            caption = re.sub(r'[ \t]{2,}', ' ', caption)
+            caption = re.sub(r' \.', '.', caption)
+            caption = re.sub(r'\n[ \t]+\n', '\n\n', caption)
+            caption = caption.strip()
+
+    return caption.strip()
 
 def extract_youtube_keyboard(reply_markup) -> InlineKeyboardMarkup | None:
     if not reply_markup or not hasattr(reply_markup, 'inline_keyboard'):
@@ -108,7 +107,6 @@ def get_file_name(message_id: int, chat_message) -> str:
             return ""
 
         name = PREFIX_NUM_UNDERSCORE_RE.sub('', name)
-
         name = name.replace('_', ' ')
 
         match = PREFIX_NUM_LETTER_RE.match(name)

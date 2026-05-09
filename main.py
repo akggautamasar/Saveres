@@ -1,5 +1,4 @@
 import os
-import math
 import shutil
 import psutil
 import asyncio
@@ -7,34 +6,14 @@ import re
 from time import time
 from pyrogram.enums import ParseMode
 from pyrogram import Client, compose, filters
-from pyrogram.errors import PeerIdInvalid, BadRequest, FloodWait, FileReferenceExpired
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-
-from helpers.utils import (
-    processMediaGroup,
-    send_media,
-    get_progress_text
-)
-
-from helpers.files import (
-    get_download_path,
-    fileSizeLimit,
-    get_readable_file_size,
-    get_readable_time,
-    cleanup_download
-)
-
-from helpers.msg import (
-    getChatMsgID,
-    get_file_name,
-    get_parsed_msg,
-    clean_caption,
-    extract_youtube_keyboard,
-    apply_caption_rules
-)
 
 from config import PyroConf
 from logger import LOGGER
+
+from helpers.files import get_readable_file_size, get_readable_time
+from helpers.msg import getChatMsgID, get_parsed_msg
+from helpers.jobs import execute_batch, execute_autoforward, handle_download, track_task, get_running_tasks
 
 bot = Client(
     "media_bot",
@@ -55,559 +34,144 @@ user = Client(
     sleep_threshold=60,
 )
 
-RUNNING_TASKS = set()
-download_semaphore = None
-upload_semaphore = None
 BATCH_JOBS = {}
-WAITING_FOR_CHANNEL = {}
-WAITING_FOR_FORWARD_DEST = {}
+WAITING_FOR_DEST = {}
 WAITING_FOR_CAPTION_RULE = {}
 
-def get_semaphores():
-    global download_semaphore, upload_semaphore
-    if download_semaphore is None:
-        download_semaphore = asyncio.Semaphore(PyroConf.MAX_CONCURRENT_DOWNLOADS)
-    if upload_semaphore is None:
-        upload_semaphore = asyncio.Semaphore(PyroConf.MAX_CONCURRENT_UPLOADS)
-    return download_semaphore, upload_semaphore
+async def trigger_caption_setup(bot: Client, user: Client, message: Message, job: dict):
+    sample_caption = ""
+    for msg_id in range(job["start_id"], min(job["start_id"] + 5, job["end_id"] + 1)):
+        try:
+            msg_obj = await user.get_messages(chat_id=job["start_chat"], message_ids=msg_id)
+            if msg_obj and not getattr(msg_obj, "empty", True):
+                raw_text = msg_obj.caption or msg_obj.text
+                if raw_text and len(raw_text.strip()) > 5:
+                    sample_caption = await get_parsed_msg(raw_text, msg_obj.caption_entities or msg_obj.entities)
+                    break
+        except Exception:
+            continue
 
-def track_task(coro):
-    task = asyncio.create_task(coro)
-    RUNNING_TASKS.add(task)
-    def _remove(_):
-        RUNNING_TASKS.discard(task)
-    task.add_done_callback(_remove)
-    return task
+    job["caption_rules"] = []
+    
+    if sample_caption:
+        user_id = message.from_user.id if hasattr(message, "from_user") and message.from_user else message.chat.id
+        job["sample_caption"] = sample_caption 
+        WAITING_FOR_CAPTION_RULE[user_id] = job
+        job["original_message_id"] = message.id 
+        
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Trim Last Line", callback_data=f"cap_rm1_{message.id}")],
+            [InlineKeyboardButton("Trim Last 2 Lines", callback_data=f"cap_rm2_{message.id}")],
+            [InlineKeyboardButton("✅ Done & Start Processing", callback_data=f"cap_done_{message.id}")]
+        ])
+        
+        text = (
+            f"**Current Caption:**\n\n`{sample_caption[:300]}...`\n\n"
+            "✂️ To remove specific text, reply to this message with that text. You can also add multiple rules!\n\n"
+            f"> 🎯 **Active Rules:** 0 applied"
+        )
+        
+        msg = await message.reply(text, reply_markup=keyboard)
+        job["menu_message_id"] = msg.id
+    else:
+        job["caption_rules"] = ["keep"]
+        if job["job_type"] == "batch":
+            await track_task(execute_batch(bot, user, job["original_message"], job))
+        else:
+            await track_task(execute_autoforward(bot, user, job["original_message"], job))
 
 @bot.on_message(filters.command("start") & filters.private)
 async def start(_, message: Message):
     welcome_text = (
-        "> 🤖 Welcome to Save Restricted Content Bot!\n\n" 
-        "I can grab photos, videos, audio, and documents from any Telegram post.\n"
-        "Just send me a link (paste it directly or use `/dl <link>`),\n\n"
-        "ℹ️ Use `/help` to view all commands and examples.\n"
-        "🔒 Make sure the user client is part of the chat.\n\n"
-        "> Ready? Send me a Telegram post link!"
+        "🤖 **Welcome to Save Restricted Bot!**\n\n"
+        "I can help you download media from restricted channels and set up auto-forwarding. 🚀\n\n"
+        "⚙️ **How to use:**\n"
+        "• Just send me any Telegram post link!\n"
+        "• Use `/help` to see all commands & examples.\n\n"
+        "⚠️ *Note: Make sure your user client is already a member of the target chat.*"
     )
     await message.reply(welcome_text, disable_web_page_preview=True)
 
 @bot.on_message(filters.command("help") & filters.private)
 async def help_command(_, message: Message):
     help_text = (
-        "**💡Bot Help & Commands**\n\n"
-        "**Single Posts**\n"
-        "> Paste any Telegram link or use `/dl <link>`.\n\n"
-        "**Batch Mode**\n"
-        "> `/batch <start_url> <end_url> [filter]`\n"
-        ">  Filters: video, doc, photo, audio\n"
-        "> Example: `/batch .../10 .../20 video`\n\n"
-        "**Auto-Forward**\n"
-        "> `/autoforward <start_link> <end_link>`\n"
-        "> Quickly forward content between unrestricted channels.\n\n"
-        "**Controls**\n"
-        "> `/stop` | `/stats` | `/logs`\n\n"
-        "**Requirements**\n"
-        "> 🔒 User session must be in the chat."
+        "💡 **Bot Commands & Usage Guide**\n\n"
+        "📥 **Single Posts**\n"
+        "• Paste any Telegram link directly, or use:\n"
+        "`/dl <post_link>`\n\n"
+        "📦 **Batch Downloads**\n"
+        "• Download a range of posts with optional media filters:\n"
+        "`/batch <start_url> <end_url> [filter]`\n"
+        "• *Filters:* `video`, `doc`, `photo`, `audio`\n"
+        "• *Example:* `/batch .../10 .../20 video`\n\n"
+        "⚡ **Auto-Forwarding**\n"
+        "`/autoforward <from_chat_link> <to_chat_link>`\n\n"
+        "✍️ **Caption Editing**\n"
+        "• Batch & Auto-Forward modes will automatically prompt you with interactive buttons to clean captions.\n\n"
+        "⚙️ **System Controls**\n"
+        "• `/stop` - Cancel active tasks\n"
+        "• `/stats` - Check bot performance\n"
+        "• `/logs` - View system logs\n\n"
+        "🔒 **Requirement:** Your user client session must be a member of the source chat."
     )
     await message.reply(help_text, disable_web_page_preview=True)
-
-async def handle_download(bot: Client, message: Message, post_url: str, pre_fetched_msg: Message = None, fetch_time: float = None, progress_msg: Message = None, batch_stats: dict = None, target_chat_id: int | str = None):
-    if target_chat_id is None:
-        target_chat_id = message.chat.id
-        
-    task_start_time = time()
-    if "?" in post_url:
-        post_url = post_url.split("?", 1)[0]
-
-    media_path = None 
-    dl_sem, up_sem = get_semaphores()
-
-    try:
-        if pre_fetched_msg:
-            chat_message = pre_fetched_msg
-            message_id = chat_message.id
-        else:
-            chat_id, message_id = getChatMsgID(post_url)
-            chat_message = await user.get_messages(chat_id=chat_id, message_ids=message_id)
-
-        if not chat_message or chat_message.empty:
-             await message.reply("**❌ Message not found or inaccessible.**")
-             return
-
-        if chat_message.document or chat_message.video or chat_message.audio:
-            file_size = (
-                chat_message.document.file_size
-                if chat_message.document
-                else chat_message.video.file_size
-                if chat_message.video
-                else chat_message.audio.file_size
-            )
-            if not await fileSizeLimit(
-                file_size, message, "download", user.me.is_premium
-            ):
-                return
-
-        parsed_caption = await get_parsed_msg(
-            chat_message.caption or "", chat_message.caption_entities
-        )
-        parsed_caption = clean_caption(parsed_caption)
-        safe_keyboard = extract_youtube_keyboard(chat_message.reply_markup)
-
-        has_downloadable_media = (
-            chat_message.document or chat_message.video or 
-            chat_message.audio or chat_message.photo or 
-            chat_message.animation or chat_message.voice or 
-            chat_message.video_note or chat_message.sticker
-        )
-
-        if chat_message.media_group_id:
-            if progress_msg and batch_stats:
-                batch_stats["processed"] += 1
-                try:
-                    await progress_msg.edit(get_progress_text("Media Group", "Multiple Files", batch_stats))
-                except Exception:
-                    pass
-            elif not progress_msg:
-                progress_msg = await message.reply(get_progress_text("Media Group", "Multiple Files"))
-
-            if not await processMediaGroup(chat_message, user, bot, message, dl_sem, progress_msg, batch_stats, target_chat_id):
-                if progress_msg:
-                    try:
-                        await progress_msg.edit("❌ **Failed to process Media Group**")
-                        await asyncio.sleep(2)
-                    except Exception:
-                        pass
-            
-            if not batch_stats and progress_msg:
-                try:
-                    await progress_msg.delete()
-                except Exception:
-                    pass
-            return
-
-        elif has_downloadable_media:
-            filename = get_file_name(message_id, chat_message)
-            download_path = get_download_path(message_id, filename)
-
-            media_obj = (
-                chat_message.document or chat_message.video or 
-                chat_message.audio or chat_message.photo or 
-                chat_message.animation or chat_message.voice or 
-                chat_message.video_note or chat_message.sticker
-            )
-            pre_file_size = getattr(media_obj, "file_size", 0) if media_obj else 0
-            file_size_str = get_readable_file_size(pre_file_size)
-            
-            LOGGER(__name__).info(f"Downloading media: {filename} (Size: {file_size_str})")
-
-            async with dl_sem:
-                if pre_fetched_msg and fetch_time and (time() - fetch_time) > 7200:
-                    try:
-                        chat_id, msg_id = getChatMsgID(post_url)
-                        fresh_msg = await user.get_messages(chat_id=chat_id, message_ids=msg_id)
-                        if fresh_msg and not fresh_msg.empty:
-                            chat_message = fresh_msg
-                            fetch_time = time()
-                    except Exception as e:
-                        LOGGER(__name__).warning(f"Failed to refresh stale reference for {filename}: {e}")
-
-                if progress_msg and batch_stats:
-                    batch_stats["processed"] += 1
-                    try:
-                        await progress_msg.edit(get_progress_text(filename, file_size_str, batch_stats))
-                    except Exception:
-                        pass
-                elif not progress_msg:
-                    progress_msg = await message.reply(get_progress_text(filename, file_size_str))
-                
-                max_retries = 3
-                retry_count = 1
-                
-                while retry_count <= max_retries:
-                    try:
-                        media_path = await chat_message.download(
-                            file_name=download_path
-                        )
-                        
-                        if media_path and os.path.exists(media_path):
-                            actual_size = os.path.getsize(media_path)
-
-                            if pre_file_size > 0 and actual_size < pre_file_size:
-                                LOGGER(__name__).warning(f"Download Incomplete: {post_url}. Refetching message...")
-                                
-                                os.remove(media_path)
-                                media_path = None
-                                
-                                try:
-                                    chat_id, msg_id = getChatMsgID(post_url)
-                                    chat_message = await user.get_messages(chat_id=chat_id, message_ids=msg_id)
-                                except Exception as refetch_err:
-                                    LOGGER(__name__).error(f"Failed to refetch message for {filename}: {refetch_err}")
-                                
-                                retry_count += 1
-                                continue
-
-                        break
-                    except FloodWait as e:
-                        wait_s = int(getattr(e, "value", 0) or 0)
-                        wait_msg = get_readable_time(wait_s)
-                        LOGGER(__name__).warning(f"FloodWait while downloading media: {wait_s}s")
-                        if progress_msg:
-                            try:
-                                await progress_msg.edit(get_progress_text(filename, file_size_str, batch_stats, f"⏳ Rate Limited: Pausing for {wait_msg}..."))
-                            except Exception:
-                                pass
-                        await asyncio.sleep(wait_s + 1)
-                        continue 
-                    except FileReferenceExpired:
-                        LOGGER(__name__).warning(f"File reference expired for {filename}. Refetching message...")
-                        try:
-                            chat_id, msg_id = getChatMsgID(post_url)
-                            chat_message = await user.get_messages(chat_id=chat_id, message_ids=msg_id)
-                        except Exception as refetch_err:
-                            LOGGER(__name__).error(f"Failed to refetch message for {filename}: {refetch_err}")
-                        
-                        retry_count += 1
-                        continue
-                    except Exception as e:
-                        LOGGER(__name__).error(f"Download Error: {e}")
-                        if retry_count < max_retries:
-                             await asyncio.sleep(2)
-                             retry_count += 1
-                             continue
-                        break
-
-            if not media_path or not os.path.exists(media_path):
-                if progress_msg:
-                    try:
-                        await progress_msg.edit(f"❌ **Failed to process {filename}**")
-                        await asyncio.sleep(2)
-                    except Exception:
-                        pass
-                return
-
-            file_size = os.path.getsize(media_path)
-            if file_size == 0:
-                if progress_msg:
-                    try:
-                        await progress_msg.edit(f"❌ **Failed to process {filename}**")
-                        await asyncio.sleep(2)
-                    except Exception:
-                        pass
-                return
-            
-            media_type = (
-                "photo"
-                if chat_message.photo
-                else "video"
-                if chat_message.video
-                else "audio"
-                if chat_message.audio
-                else "document"
-            )
-            
-            async with up_sem:
-                upload_success = await send_media(
-                    bot,
-                    message,
-                    media_path,
-                    media_type,
-                    parsed_caption,
-                    progress_msg,
-                    batch_stats,
-                    target_chat_id,
-                    reply_markup=safe_keyboard,
-                    message_id=message_id
-                )
-
-            if upload_success:
-                if not batch_stats and progress_msg:
-                    try:
-                        await progress_msg.delete()
-                    except Exception:
-                        pass
-                LOGGER(__name__).info(f"Finished Processing: {post_url}")
-
-        elif chat_message.text:
-            if batch_stats:
-                batch_stats["processed"] += 1
-                try:
-                    await progress_msg.edit(get_progress_text("Text Message", "N/A", batch_stats))
-                except Exception:
-                    pass
-            
-            parsed_text = await get_parsed_msg(chat_message.text or "", chat_message.entities)
-            parsed_text = clean_caption(parsed_text)
-            
-            await bot.send_message(
-                chat_id=target_chat_id,
-                text=parsed_text, 
-                reply_markup=safe_keyboard,
-                disable_web_page_preview=True
-            )
-            LOGGER(__name__).info(f"Finished Processing: {post_url}")
-        else:
-            if batch_stats:
-                batch_stats["processed"] += 1
-            await message.reply("**No downloadable media or text found in the post URL.**")
-
-    except (PeerIdInvalid, BadRequest, KeyError):
-        await message.reply("**Make sure the user client is part of the chat.**")
-    except FloodWait as e:
-        wait_s = int(getattr(e, "value", 0) or 0)
-        LOGGER(__name__).warning(f"FloodWait in handle_download: {wait_s}s")
-        if wait_s > 0:
-            await asyncio.sleep(wait_s + 1)
-        return
-    except Exception as e:
-        error_message = f"**❌ {str(e)}**"
-        await message.reply(error_message)
-        LOGGER(__name__).error(f"Error handling {post_url}: {e}")
-    finally:
-        if media_path:
-            cleanup_download(media_path)
-        
-        elapsed = time() - task_start_time
-        if elapsed < 2.0:
-            await asyncio.sleep(2.0 - elapsed)
 
 @bot.on_message(filters.command("batch") & filters.private)
 async def download_range(bot: Client, message: Message):
     args = message.text.split()
-
     if len(args) < 3 or not all(arg.startswith("https://t.me/") for arg in args[1:3]):
-        await message.reply(
-            "🚀**Batch Download**\n"
-            "> `/batch start_link end_link [filter]`\n\n"
-            "💡**Examples:**\n"
-            "> `/batch https://t.me/mychannel/100 https://t.me/mychannel/120` (Leave blank for All)\n"
-            "> `/batch https://t.me/mychannel/100 https://t.me/mychannel/120 video` (Only Videos)\n\n"
-        )
-        return
+        return await message.reply("🚀**Batch Download**\n> `/batch start_link end_link [filter]`")
 
     filter_type = args[3].lower() if len(args) > 3 else "all"
 
     try:
         start_chat, start_id = getChatMsgID(args[1])
-        end_chat,   end_id   = getChatMsgID(args[2])
+        end_chat, end_id = getChatMsgID(args[2])
     except Exception as e:
         return await message.reply(f"**❌ Error parsing links:\n{e}**")
 
-    if start_chat != end_chat:
-        return await message.reply("**❌ Both links must be from the same channel.**")
-    if start_id > end_id:
-        return await message.reply("**❌ Invalid range: start ID cannot exceed end ID.**")
+    if start_chat != end_chat: return await message.reply("**❌ Both links must be from the same channel.**")
+    if start_id > end_id: return await message.reply("**❌ Invalid range.**")
 
-    prefix = args[1].rsplit("/", 1)[0]
-    
     BATCH_JOBS[message.id] = {
         "start_chat": start_chat,
         "start_id": start_id,
         "end_id": end_id,
         "filter_type": filter_type,
-        "prefix": prefix,
+        "prefix": args[1].rsplit("/", 1)[0],
+        "job_type": "batch",
         "original_message": message
     }
 
     keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("Bot Chat", callback_data=f"batch_bot_{message.id}"),
-            InlineKeyboardButton("Channel", callback_data=f"batch_chan_{message.id}")
-        ]
+        [InlineKeyboardButton("Bot Chat", callback_data=f"batch_bot_{message.id}"),
+         InlineKeyboardButton("Channel", callback_data=f"batch_chan_{message.id}")]
     ])
-    
-    await message.reply(
-        "**Where do you want to forward the media?**",
-        reply_markup=keyboard
-    )
+    await message.reply("**Where do you want to forward the media?**", reply_markup=keyboard)
 
 @bot.on_callback_query(filters.regex(r"^batch_(bot|chan)_(\d+)$"))
 async def batch_destination_callback(bot: Client, callback_query: CallbackQuery):
-    action = callback_query.matches[0].group(1)
-    msg_id = int(callback_query.matches[0].group(2))
+    action, msg_id = callback_query.matches[0].groups()
+    msg_id = int(msg_id)
 
     if msg_id not in BATCH_JOBS:
-        return await callback_query.answer("Batch process has expired or is invalid.", show_alert=True)
+        return await callback_query.answer("Batch process has expired.", show_alert=True)
 
     job = BATCH_JOBS.pop(msg_id)
     await callback_query.message.delete()
 
     if action == "bot":
-        target_chat_id = callback_query.message.chat.id
-        await track_task(execute_batch(bot, job["original_message"], job, target_chat_id))
+        job["target_chat"] = callback_query.message.chat.id
+        await trigger_caption_setup(bot, user, callback_query.message, job)
     elif action == "chan":
-        WAITING_FOR_CHANNEL[callback_query.from_user.id] = job
-        await job["original_message"].reply(
-            "**Please send me a post link from your target channel.**\n\n"
-            "> ⚠️Make me a channel Admin with 'Post Messages' rights first!"
-        )
-
-async def execute_batch(bot: Client, original_msg: Message, job: dict, target_chat_id: int | str):
-    start_chat = job["start_chat"]
-    start_id = job["start_id"]
-    end_id = job["end_id"]
-    filter_type = job["filter_type"]
-    prefix = job["prefix"]
-
-    try:
-        await user.get_chat(start_chat)
-    except Exception:
-        pass
-
-    loading = await original_msg.reply(f"📥 **Started Batch Processing...**")
-    try:
-        await loading.pin(disable_notification=True, both_sides=True)
-    except Exception:
-        pass
-
-    LOGGER(__name__).info(f"Batch Process Started | Range: {start_id} to {end_id}")
-
-    downloaded = skipped = failed = 0
-    batch_tasks = []
-    BATCH_SIZE = PyroConf.BATCH_SIZE
-    processed_media_groups = set()
-    
-    all_ids = list(range(start_id, end_id + 1))
-    chunk_size = 100
-    
-    total_links = len(all_ids)
-    batch_stats = {"total": total_links, "processed": 0}
-
-    rapid_file_count = 0
-    rapid_window_start = time()
-
-    for i in range(0, len(all_ids), chunk_size):
-        chunk_ids = all_ids[i:i + chunk_size]
-        try:
-            chunk_fetch_time = time()
-            messages = await user.get_messages(chat_id=start_chat, message_ids=chunk_ids)
-            if not isinstance(messages, list):
-                messages = [messages]
-        except Exception as e:
-            LOGGER(__name__).error(f"Error fetching chunk: {e}")
-            failed += len(chunk_ids)
-            batch_stats["processed"] += len(chunk_ids)
-            continue
-            
-        for chat_msg in messages:
-            if not chat_msg or chat_msg.empty:
-                skipped += 1
-                batch_stats["processed"] += 1
-                continue
-            
-            msg_id = chat_msg.id
-            url = f"{prefix}/{msg_id}"
-            
-            if chat_msg.media_group_id:
-                if chat_msg.media_group_id in processed_media_groups:
-                    skipped += 1
-                    batch_stats["processed"] += 1
-                    continue
-                processed_media_groups.add(chat_msg.media_group_id)
-
-            has_media = bool(chat_msg.media_group_id or chat_msg.media)
-            has_text  = bool(chat_msg.text or chat_msg.caption)
-            if not (has_media or has_text):
-                skipped += 1
-                batch_stats["processed"] += 1
-                continue
-                
-            if filter_type != "all":
-                if filter_type == "video" and not chat_msg.video:
-                    skipped += 1
-                    batch_stats["processed"] += 1
-                    continue
-                elif filter_type == "doc" and not chat_msg.document:
-                    skipped += 1
-                    batch_stats["processed"] += 1
-                    continue
-                elif filter_type == "audio" and not chat_msg.audio:
-                    skipped += 1
-                    batch_stats["processed"] += 1
-                    continue
-                elif filter_type == "photo" and not chat_msg.photo:
-                    skipped += 1
-                    batch_stats["processed"] += 1
-                    continue
-
-            task = track_task(handle_download(
-                bot, original_msg, url, 
-                pre_fetched_msg=chat_msg, 
-                fetch_time=chunk_fetch_time,
-                progress_msg=loading,
-                batch_stats=batch_stats,
-                target_chat_id=target_chat_id
-            ))
-            batch_tasks.append(task)
-            
-            if len(batch_tasks) >= BATCH_SIZE:
-                results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-                for result in results:
-                    if isinstance(result, asyncio.CancelledError):
-                        try:
-                            await loading.unpin()
-                        except Exception:
-                            pass
-                        await loading.delete()
-                        LOGGER(__name__).info(f"Batch Process Cancelled. Downloaded: {downloaded} | Skipped: {skipped} | Failed: {failed}")
-                        return await original_msg.reply(
-                            f"**❌ Batch canceled** after downloading `{downloaded}` posts."
-                        )
-                    elif isinstance(result, Exception):
-                        failed += 1
-                        LOGGER(__name__).error(f"Error: {result}")
-                    else:
-                        downloaded += 1
-                        rapid_file_count += 1
-
-                if rapid_file_count >= PyroConf.RAPID_LIMIT:
-                    elapsed = time() - rapid_window_start
-                    if elapsed < PyroConf.RAPID_WINDOW_DURATION:
-                        sleep_duration = PyroConf.RAPID_WINDOW_DURATION - elapsed
-                        LOGGER(__name__).warning(f"Sleeping for {sleep_duration:.1f}s to avoid floodwait.")
-                        try:
-                            await loading.edit(f"📥 **Batch Processing...**\n> 🕘 Pausing for {int(sleep_duration)}s to avoid floodwait.")
-                        except Exception:
-                            pass
-                        await asyncio.sleep(sleep_duration)
-                    
-                    rapid_file_count = 0
-                    rapid_window_start = time()
-
-                batch_tasks.clear()
-                await asyncio.sleep(PyroConf.FLOOD_WAIT_DELAY)
-
-    if batch_tasks:
-        results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-        for result in results:
-            if isinstance(result, Exception):
-                failed += 1
-            else:
-                downloaded += 1
-
-    try:
-        await loading.unpin()
-    except Exception:
-        pass
-    await loading.delete()
-    LOGGER(__name__).info(f"Batch Process Completed | Downloaded: {downloaded} | Skipped: {skipped} | Failed: {failed}")
-    await original_msg.reply(
-        "> ✅Batch Process Completed!\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        f"📥 **Downloaded** : {downloaded} post(s)\n"
-        f"⏭️ **Skipped** : {skipped} (no content or filtered)\n"
-        f"❌ **Failed** : {failed} error(s)"
-    )
+        WAITING_FOR_DEST[callback_query.from_user.id] = job
+        await job["original_message"].reply("**🔗 Please send a post link from the target channel.**")
 
 @bot.on_message(filters.command(["autoforward"]) & filters.private)
 async def auto_forward_init(bot: Client, message: Message):
     args = message.text.split()
     if len(args) < 3 or not all(arg.startswith("https://t.me/") for arg in args[1:3]):
-        return await message.reply(
-            "🚀 **Auto-Forward**\n"
-            "> `/autoforward <start_link> <end_link>`\n\n"
-            "⚠️ *Ensure the user session has forward rights!*"
-        )
+        return await message.reply("🚀 **Auto-Forward**\n> `/autoforward <start_link> <end_link>`")
     
     try:
         start_chat, start_id = getChatMsgID(args[1])
@@ -615,210 +179,139 @@ async def auto_forward_init(bot: Client, message: Message):
     except Exception as e:
         return await message.reply(f"**❌ Error parsing links:\n{e}**")
     
-    if start_chat != end_chat:
-        return await message.reply("**❌ Both links must be from the same channel.**")
-    if start_id > end_id:
-        return await message.reply("**❌ Invalid range: start ID cannot exceed end ID.**")
+    if start_chat != end_chat: return await message.reply("**❌ Both links must be from the same channel.**")
+    if start_id > end_id: return await message.reply("**❌ Invalid range.**")
     
     job = {
         "start_chat": start_chat,
         "start_id": start_id,
         "end_id": end_id,
+        "job_type": "autoforward",
         "original_message": message
     }
     
-    WAITING_FOR_FORWARD_DEST[message.from_user.id] = job
-    await message.reply("**Please send me a post link from your target channel.**")
+    WAITING_FOR_DEST[message.from_user.id] = job
+    await message.reply("**🔗 Please send a post link from the target channel.**")
 
-async def execute_autoforward(bot: Client, original_msg: Message, job: dict):
-    start_chat = job["start_chat"]
-    target_chat = job["target_chat"]
-    start_id = job["start_id"]
-    end_id = job["end_id"]
-    caption_rule = job.get("caption_rule", "keep")
-    
-    try:
-        chat_info = await user.get_chat(start_chat)
-        if getattr(chat_info, "has_protected_content", False):
-            return await original_msg.reply("❌ **Source chat is restricted!**\n`/autoforward` only works for unrestricted chats. Please use `/batch` instead.")
-    except Exception:
-        pass 
-    
-    loading = await original_msg.reply(f"📥 **Started Auto-Forwarding...**")
-    copied = skipped = failed = 0
-    all_ids = list(range(start_id, end_id + 1))
-    chunk_size = 100
-    
-    for i in range(0, len(all_ids), chunk_size):
-        chunk_ids = all_ids[i:i + chunk_size]
-        try:
-            messages = await user.get_messages(chat_id=start_chat, message_ids=chunk_ids)
-            if not isinstance(messages, list): messages = [messages]
-        except Exception:
-            failed += len(chunk_ids)
-            continue
-            
-        for chat_msg in messages:
-            if not chat_msg or chat_msg.empty:
-                skipped += 1
-                continue
-                
-            try:
-                custom_caption = chat_msg.caption or chat_msg.text or ""
-                if custom_caption:
-                    custom_caption = clean_caption(custom_caption)
-                    custom_caption = apply_caption_rules(custom_caption, caption_rule)
-                
-                kwargs = {"chat_id": target_chat, "from_chat_id": start_chat, "message_id": chat_msg.id}
-                if custom_caption:
-                    kwargs["caption"] = custom_caption
-                
-                await user.copy_message(**kwargs)
-                copied += 1
-                await asyncio.sleep(1.5) 
-            except FloodWait as e:
-                wait_s = int(getattr(e, "value", 0) or 0)
-                await asyncio.sleep(wait_s + 1)
-                failed += 1 
-            except Exception:
-                failed += 1
-                
-        await asyncio.sleep(PyroConf.FLOOD_WAIT_DELAY) 
-        
-    await loading.delete()
-    await original_msg.reply(
-        "> ✅ **Auto-Forward Completed!**\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        f"📥 **Forwarded** : {copied} post(s)\n"
-        f"⏭️ **Skipped** : {skipped}\n"
-        f"❌ **Failed** : {failed}"
-    )
-
-@bot.on_callback_query(filters.regex(r"^cap_(keep|rm1|rm2)_(\d+)$"))
+@bot.on_callback_query(filters.regex(r"^cap_(rm1|rm2|done)_(\d+)$"))
 async def caption_rule_callback(bot: Client, callback_query: CallbackQuery):
-    rule = callback_query.matches[0].group(1)
+    action, msg_id = callback_query.matches[0].groups()
     user_id = callback_query.from_user.id
     
     if user_id not in WAITING_FOR_CAPTION_RULE:
         return await callback_query.answer("Session expired or invalid.", show_alert=True)
     
-    job = WAITING_FOR_CAPTION_RULE.pop(user_id)
-    await callback_query.message.delete()
+    job = WAITING_FOR_CAPTION_RULE[user_id]
     
-    rule_map = {"keep": "keep", "rm1": "remove_1", "rm2": "remove_2"}
-    job["caption_rule"] = rule_map[rule]
+    if action == "done":
+        WAITING_FOR_CAPTION_RULE.pop(user_id)
+        await callback_query.message.delete()
+        if job["job_type"] == "batch":
+            await track_task(execute_batch(bot, user, job["original_message"], job))
+        else:
+            await track_task(execute_autoforward(bot, user, job["original_message"], job))
+        return
+        
+    rule_map = {"rm1": "remove_1", "rm2": "remove_2"}
+    rule_to_add = rule_map[action]
     
-    await track_task(execute_autoforward(bot, job["original_message"], job))
+    if rule_to_add in job["caption_rules"]:
+        return await callback_query.answer("⚠️ This rule is already applied!", show_alert=True)
+        
+    job["caption_rules"].append(rule_to_add)
+    await callback_query.answer("✅ Rule Added!", show_alert=False)
+    
+    rules_count = len(job["caption_rules"])
+    text = (
+        f"**Current Caption:**\n\n`{job['sample_caption'][:300]}...`\n\n"
+        "🛠️ Chain multiple rules! Reply with the exact text you want deleted.\n\n"
+        f"> 🎯 **Active Rules:** {rules_count} applied"
+    )
+    
+    try:
+        await callback_query.message.edit_text(text, reply_markup=callback_query.message.reply_markup)
+    except Exception: pass
 
 @bot.on_message(filters.private & filters.text & ~filters.command(["start", "help", "dl", "stats", "logs", "stop", "autoforward", "batch"]))
 async def handle_any_message(bot: Client, message: Message):
     user_id = message.from_user.id
 
-    if user_id in WAITING_FOR_CHANNEL:
-        job = WAITING_FOR_CHANNEL.pop(user_id)
-        try:
-            target_chat_id, _ = getChatMsgID(message.text)
-            await track_task(execute_batch(bot, job["original_message"], job, target_chat_id))
-        except Exception as e:
-            await message.reply(f"**❌ Error parsing target link:\n{e}**")
-        return
-
-    if user_id in WAITING_FOR_FORWARD_DEST:
-        job = WAITING_FOR_FORWARD_DEST.pop(user_id)
+    if user_id in WAITING_FOR_DEST:
+        job = WAITING_FOR_DEST.pop(user_id)
         try:
             target_chat_id, _ = getChatMsgID(message.text)
             job["target_chat"] = target_chat_id
+            await trigger_caption_setup(bot, user, message, job)
         except Exception as e:
-            return await message.reply(f"**❌ Error parsing target link:\n{e}**")
-        
-        try:
-            first_msg = await user.get_messages(chat_id=job["start_chat"], message_ids=job["start_id"])
-            caption = first_msg.caption or first_msg.text or ""
-        except Exception:
-            caption = ""
-        
-        if caption:
-            WAITING_FOR_CAPTION_RULE[user_id] = job
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("Default", callback_data=f"cap_keep_{message.id}")],
-                [InlineKeyboardButton("Trim Last Line", callback_data=f"cap_rm1_{message.id}")],
-                [InlineKeyboardButton("Trim Last 2 Lines", callback_data=f"cap_rm2_{message.id}")]
-            ])
-            job["original_message_id"] = message.id 
-            await message.reply(
-                f"**Message caption:**\n\n`{caption}`\n\n"
-                "Reply to this with the exact text you want to remove!)*", 
-                reply_markup=keyboard
-            )
-        else:
-            job["caption_rule"] = "keep"
-            await track_task(execute_autoforward(bot, job["original_message"], job))
+            await message.reply(f"**❌ Error parsing target link:\n{e}**")
         return
     
     if user_id in WAITING_FOR_CAPTION_RULE:
-        job = WAITING_FOR_CAPTION_RULE.pop(user_id)
-        job["caption_rule"] = f"remove_text:{message.text}"
-        await track_task(execute_autoforward(bot, job["original_message"], job))
+        job = WAITING_FOR_CAPTION_RULE[user_id]
+        job["caption_rules"].append(f"remove_text:{message.text}")
+
+        rules_count = len(job["caption_rules"])
+        text = (
+            f"**Current Caption:**\n\n`{job['sample_caption'][:300]}...`\n\n"
+            "🛠️ Chain multiple rules! Reply with the exact text you want deleted.\n\n"
+            f"> 🎯 **Active Rules:** {rules_count} applied"
+        )
+        try:
+            await bot.edit_message_text(
+                chat_id=message.chat.id, 
+                message_id=job["menu_message_id"], 
+                text=text, 
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Trim Last Line", callback_data=f"cap_rm1_{job['original_message_id']}")],
+                    [InlineKeyboardButton("Trim Last 2 Lines", callback_data=f"cap_rm2_{job['original_message_id']}")],
+                    [InlineKeyboardButton("✅ Done & Start Processing", callback_data=f"cap_done_{job['original_message_id']}")]
+                ])
+            )
+        except Exception: pass
+        
+        await message.reply("✅ **Text rule added.** You can type more words to remove, or click **Done** on the menu above.")
         return
 
     if re.search(r"t\.me\/", message.text):
-        await track_task(handle_download(bot, message, message.text))
+        await track_task(handle_download(bot, user, message, message.text))
 
 @bot.on_message(filters.command("dl") & filters.private)
 async def download_media(bot: Client, message: Message):
-    if len(message.command) < 2:
-        await message.reply("**Provide a post URL after the /dl command.**")
-        return
-
-    post_url = message.command[1]
-    await track_task(handle_download(bot, message, post_url))
+    if len(message.command) < 2: return await message.reply("**Provide a post URL after the /dl command.**")
+    await track_task(handle_download(bot, user, message, message.command[1]))
 
 @bot.on_message(filters.command("stats") & filters.private)
 async def stats(_, message: Message):
     currentTime = get_readable_time(time() - PyroConf.BOT_START_TIME)
-    
     def get_sys_stats():
         t, u, f = shutil.disk_usage(".")
-        s = psutil.net_io_counters().bytes_sent
-        r = psutil.net_io_counters().bytes_recv
-        c = psutil.cpu_percent(interval=0.5)
-        m = psutil.virtual_memory().percent
-        d = psutil.disk_usage("/").percent
-        mem_mb = round(psutil.Process(os.getpid()).memory_info()[0] / 1024**2)
-        return t, u, f, s, r, c, m, d, mem_mb
+        return (
+            get_readable_file_size(t), get_readable_file_size(f),
+            get_readable_file_size(psutil.net_io_counters().bytes_sent),
+            get_readable_file_size(psutil.net_io_counters().bytes_recv),
+            psutil.cpu_percent(interval=0.5), psutil.virtual_memory().percent,
+            psutil.disk_usage("/").percent, round(psutil.Process(os.getpid()).memory_info()[0] / 1024**2)
+        )
 
-    total, used, free, sent, recv, cpuUsage, memory, disk, proc_mem = await asyncio.to_thread(get_sys_stats)
+    total, free, sent, recv, cpuUsage, memory, disk, proc_mem = await asyncio.to_thread(get_sys_stats)
     
-    total = get_readable_file_size(total)
-    free = get_readable_file_size(free)
-    sent = get_readable_file_size(sent)
-    recv = get_readable_file_size(recv)
-
-    stats = (
+    await message.reply(
         "**Bot's Live and Running Successfully.**\n\n"
-        f"**➜ Bot Uptime:** {currentTime}\n"
-        f"**➜ Free Disk Space:** {free}\n"
-        f"**➜ Total Disk Space:** {total}\n"
-        f"**➜ Memory Usage:** {proc_mem} MiB\n\n"
-        f"**➜ Uploaded:** {sent}\n"
-        f"**➜ Downloaded:** {recv}\n\n"
-        f"**➜ CPU:** {cpuUsage}% | "
-        f"**➜ RAM:** {memory}% | "
-        f"**➜ DISK:** {disk}%"
+        f"**➜ Uptime:** {currentTime} | **Mem:** {proc_mem} MiB\n"
+        f"**➜ Free Disk:** {free} of {total}\n"
+        f"**➜ Traffic:** 🔼 {sent} | 🔽 {recv}\n"
+        f"**➜ System:** CPU: {cpuUsage}% | RAM: {memory}% | DISK: {disk}%"
     )
-    await message.reply(stats)
 
 @bot.on_message(filters.command("logs") & filters.private)
 async def logs(_, message: Message):
-    if os.path.exists("logs.txt"):
-        await message.reply_document(document="logs.txt", caption="**Logs**")
-    else:
-        await message.reply("**Not exists**")
+    if os.path.exists("logs.txt"): await message.reply_document(document="logs.txt", caption="**Logs**")
+    else: await message.reply("**Not exists**")
 
 @bot.on_message(filters.command("stop") & filters.private)
 async def cancel_all_tasks(_, message: Message):
     cancelled = 0
-    for task in list(RUNNING_TASKS):
+    for task in list(get_running_tasks()):
         if not task.done():
             task.cancel()
             cancelled += 1
@@ -826,11 +319,7 @@ async def cancel_all_tasks(_, message: Message):
 
 if __name__ == "__main__":
     LOGGER(__name__).info("Bot Started!")
-    try:
-        compose([bot, user])
-    except KeyboardInterrupt:
-        pass
-    except Exception as e:
-        LOGGER(__name__).error(f"Bot Crashed: {e}")
-    finally:
-        LOGGER(__name__).info("Bot Stopped.")
+    try: compose([bot, user])
+    except KeyboardInterrupt: pass
+    except Exception as e: LOGGER(__name__).error(f"Bot Crashed: {e}")
+    finally: LOGGER(__name__).info("Bot Stopped.")

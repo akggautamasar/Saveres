@@ -1,0 +1,343 @@
+import os
+import asyncio
+from time import time
+from pyrogram import Client
+from pyrogram.types import Message
+from pyrogram.errors import PeerIdInvalid, BadRequest, FloodWait, FileReferenceExpired
+
+from config import PyroConf
+from logger import LOGGER
+
+from helpers.utils import processMediaGroup, send_media, get_progress_text
+from helpers.files import get_download_path, fileSizeLimit, get_readable_file_size, get_readable_time, cleanup_download
+from helpers.msg import getChatMsgID, get_file_name, get_parsed_msg, clean_caption, extract_youtube_keyboard, apply_caption_rules
+
+RUNNING_TASKS = set()
+download_semaphore = None
+upload_semaphore = None
+
+def get_semaphores():
+    global download_semaphore, upload_semaphore
+    if download_semaphore is None:
+        download_semaphore = asyncio.Semaphore(PyroConf.MAX_CONCURRENT_DOWNLOADS)
+    if upload_semaphore is None:
+        upload_semaphore = asyncio.Semaphore(PyroConf.MAX_CONCURRENT_UPLOADS)
+    return download_semaphore, upload_semaphore
+
+def track_task(coro):
+    task = asyncio.create_task(coro)
+    RUNNING_TASKS.add(task)
+    def _remove(_):
+        RUNNING_TASKS.discard(task)
+    task.add_done_callback(_remove)
+    return task
+
+def get_running_tasks():
+    return RUNNING_TASKS
+
+async def handle_download(bot: Client, user: Client, message: Message, post_url: str, pre_fetched_msg: Message = None, fetch_time: float = None, progress_msg: Message = None, batch_stats: dict = None, target_chat_id: int | str = None):
+    if target_chat_id is None:
+        target_chat_id = message.chat.id
+        
+    task_start_time = time()
+    if "?" in post_url:
+        post_url = post_url.split("?", 1)[0]
+
+    media_path = None 
+    dl_sem, up_sem = get_semaphores()
+
+    try:
+        if pre_fetched_msg:
+            chat_message = pre_fetched_msg
+            message_id = chat_message.id
+        else:
+            chat_id, message_id = getChatMsgID(post_url)
+            chat_message = await user.get_messages(chat_id=chat_id, message_ids=message_id)
+
+        if not chat_message or chat_message.empty:
+             if not batch_stats: await message.reply("**❌ Message not found or inaccessible.**")
+             return
+
+        if chat_message.document or chat_message.video or chat_message.audio:
+            file_size = chat_message.document.file_size if chat_message.document else chat_message.video.file_size if chat_message.video else chat_message.audio.file_size
+            if not await fileSizeLimit(file_size, message, "download", user.me.is_premium):
+                return
+
+        parsed_caption = await get_parsed_msg(chat_message.caption or "", chat_message.caption_entities)
+        parsed_caption = clean_caption(parsed_caption)
+        safe_keyboard = extract_youtube_keyboard(chat_message.reply_markup)
+        has_downloadable_media = bool(chat_message.document or chat_message.video or chat_message.audio or chat_message.photo or chat_message.animation or chat_message.voice or chat_message.video_note or chat_message.sticker)
+
+        if chat_message.media_group_id:
+            if progress_msg and batch_stats:
+                batch_stats["processed"] += 1
+                try: await progress_msg.edit(get_progress_text("Media Group", "Multiple Files", batch_stats))
+                except Exception: pass
+            elif not progress_msg:
+                progress_msg = await message.reply(get_progress_text("Media Group", "Multiple Files"))
+
+            if not await processMediaGroup(chat_message, user, bot, message, dl_sem, progress_msg, batch_stats, target_chat_id):
+                if progress_msg:
+                    try:
+                        await progress_msg.edit("❌ **Failed to process Media Group**")
+                        await asyncio.sleep(2)
+                    except Exception: pass
+            
+            if not batch_stats and progress_msg:
+                try: await progress_msg.delete()
+                except Exception: pass
+            return
+
+        elif has_downloadable_media:
+            filename = get_file_name(message_id, chat_message)
+            download_path = get_download_path(message_id, filename)
+
+            media_obj = chat_message.document or chat_message.video or chat_message.audio or chat_message.photo or chat_message.animation or chat_message.voice or chat_message.video_note or chat_message.sticker
+            pre_file_size = getattr(media_obj, "file_size", 0) if media_obj else 0
+            file_size_str = get_readable_file_size(pre_file_size)
+
+            async with dl_sem:
+                if pre_fetched_msg and fetch_time and (time() - fetch_time) > 7200:
+                    try:
+                        chat_id, msg_id = getChatMsgID(post_url)
+                        fresh_msg = await user.get_messages(chat_id=chat_id, message_ids=msg_id)
+                        if fresh_msg and not fresh_msg.empty:
+                            chat_message = fresh_msg
+                            fetch_time = time()
+                    except Exception as e:
+                        pass
+
+                if progress_msg and batch_stats:
+                    batch_stats["processed"] += 1
+                    try: await progress_msg.edit(get_progress_text(filename, file_size_str, batch_stats))
+                    except Exception: pass
+                elif not progress_msg:
+                    progress_msg = await message.reply(get_progress_text(filename, file_size_str))
+                
+                max_retries = 3
+                retry_count = 1
+                
+                while retry_count <= max_retries:
+                    try:
+                        media_path = await chat_message.download(file_name=download_path)
+                        break
+                    except FloodWait as e:
+                        wait_s = int(getattr(e, "value", 0) or 0)
+                        await asyncio.sleep(wait_s + 1)
+                        continue 
+                    except FileReferenceExpired:
+                        try:
+                            chat_id, msg_id = getChatMsgID(post_url)
+                            chat_message = await user.get_messages(chat_id=chat_id, message_ids=msg_id)
+                        except Exception: pass
+                        retry_count += 1
+                        continue
+                    except Exception:
+                        if retry_count < max_retries:
+                             await asyncio.sleep(2)
+                             retry_count += 1
+                             continue
+                        break
+
+            if not media_path or not os.path.exists(media_path): return
+            if os.path.getsize(media_path) == 0: return
+            
+            media_type = "photo" if chat_message.photo else "video" if chat_message.video else "audio" if chat_message.audio else "document"
+            
+            async with up_sem:
+                upload_success = await send_media(
+                    bot, message, media_path, media_type, parsed_caption, progress_msg, batch_stats, target_chat_id, reply_markup=safe_keyboard, message_id=message_id
+                )
+
+            if upload_success and not batch_stats and progress_msg:
+                try: await progress_msg.delete()
+                except Exception: pass
+
+        elif chat_message.text:
+            if batch_stats:
+                batch_stats["processed"] += 1
+            
+            parsed_text = await get_parsed_msg(chat_message.text or "", chat_message.entities)
+            parsed_text = clean_caption(parsed_text)
+            
+            await bot.send_message(chat_id=target_chat_id, text=parsed_text, reply_markup=safe_keyboard, disable_web_page_preview=True)
+            
+    except (PeerIdInvalid, BadRequest, KeyError):
+        if not batch_stats: await message.reply("**Make sure the user client is part of the chat.**")
+    except FloodWait as e:
+        wait_s = int(getattr(e, "value", 0) or 0)
+        if wait_s > 0: await asyncio.sleep(wait_s + 1)
+    except Exception as e:
+        if not batch_stats: await message.reply(f"**❌ {str(e)}**")
+    finally:
+        if media_path: cleanup_download(media_path)
+        elapsed = time() - task_start_time
+        if elapsed < 2.0: await asyncio.sleep(2.0 - elapsed)
+
+async def execute_batch(bot: Client, user: Client, original_msg: Message, job: dict):
+    start_chat, target_chat = job["start_chat"], job["target_chat"]
+    start_id, end_id = job["start_id"], job["end_id"]
+    filter_type, prefix = job.get("filter_type", "all"), job.get("prefix", "")
+    caption_rules = job.get("caption_rules", [])
+
+    try: await user.get_chat(start_chat)
+    except Exception: pass
+
+    loading = await original_msg.reply(f"📥 **Started Batch Processing...**")
+    try: await loading.pin(disable_notification=True, both_sides=True)
+    except Exception: pass
+
+    downloaded = skipped = failed = 0
+    batch_tasks = []
+    processed_media_groups = set()
+    
+    all_ids = list(range(start_id, end_id + 1))
+    batch_stats = {"total": len(all_ids), "processed": 0}
+    rapid_file_count, rapid_window_start = 0, time()
+
+    for i in range(0, len(all_ids), 100):
+        chunk_ids = all_ids[i:i + 100]
+        try:
+            chunk_fetch_time = time()
+            messages = await user.get_messages(chat_id=start_chat, message_ids=chunk_ids)
+            if not isinstance(messages, list): messages = [messages]
+        except Exception:
+            failed += len(chunk_ids)
+            batch_stats["processed"] += len(chunk_ids)
+            continue
+            
+        for chat_msg in messages:
+            if not chat_msg or chat_msg.empty:
+                skipped += 1
+                batch_stats["processed"] += 1
+                continue
+            
+            if chat_msg.media_group_id:
+                if chat_msg.media_group_id in processed_media_groups:
+                    skipped += 1
+                    batch_stats["processed"] += 1
+                    continue
+                processed_media_groups.add(chat_msg.media_group_id)
+
+            if not (chat_msg.media_group_id or chat_msg.media or chat_msg.text or chat_msg.caption):
+                skipped += 1
+                batch_stats["processed"] += 1
+                continue
+                
+            if filter_type != "all":
+                if (filter_type == "video" and not chat_msg.video) or \
+                   (filter_type == "doc" and not chat_msg.document) or \
+                   (filter_type == "audio" and not chat_msg.audio) or \
+                   (filter_type == "photo" and not chat_msg.photo):
+                    skipped += 1
+                    batch_stats["processed"] += 1
+                    continue
+
+            if chat_msg.caption:
+                chat_msg.caption = apply_caption_rules(clean_caption(chat_msg.caption), caption_rules)
+            elif chat_msg.text:
+                chat_msg.text = apply_caption_rules(clean_caption(chat_msg.text), caption_rules)
+
+            url = f"{prefix}/{chat_msg.id}"
+            task = track_task(handle_download(bot, user, original_msg, url, chat_msg, chunk_fetch_time, loading, batch_stats, target_chat))
+            batch_tasks.append(task)
+            
+            if len(batch_tasks) >= PyroConf.BATCH_SIZE:
+                results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                for result in results:
+                    if isinstance(result, asyncio.CancelledError):
+                        try: await loading.unpin()
+                        except Exception: pass
+                        await loading.delete()
+                        return await original_msg.reply(f"**❌ Batch canceled** after downloading `{downloaded}` posts.")
+                    elif isinstance(result, Exception): failed += 1
+                    else: downloaded += 1; rapid_file_count += 1
+
+                if rapid_file_count >= PyroConf.RAPID_LIMIT:
+                    elapsed = time() - rapid_window_start
+                    if elapsed < PyroConf.RAPID_WINDOW_DURATION:
+                        sleep_duration = PyroConf.RAPID_WINDOW_DURATION - elapsed
+                        try: await loading.edit(f"📥 **Batch Processing...**\n> 🕘 Pausing for {int(sleep_duration)}s to avoid floodwait.")
+                        except Exception: pass
+                        await asyncio.sleep(sleep_duration)
+                    rapid_file_count, rapid_window_start = 0, time()
+
+                batch_tasks.clear()
+                await asyncio.sleep(PyroConf.FLOOD_WAIT_DELAY)
+
+    if batch_tasks:
+        results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception): failed += 1
+            else: downloaded += 1
+
+    try: await loading.unpin()
+    except Exception: pass
+    await loading.delete()
+    
+    await original_msg.reply(
+        "> ✅ **Batch Process Completed!**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        f"📥 **Downloaded** : {downloaded} post(s)\n"
+        f"⏭️ **Skipped** : {skipped} (filtered)\n"
+        f"❌ **Failed** : {failed} error(s)"
+    )
+
+async def execute_autoforward(bot: Client, user: Client, original_msg: Message, job: dict):
+    start_chat, target_chat = job["start_chat"], job["target_chat"]
+    start_id, end_id = job["start_id"], job["end_id"]
+    caption_rules = job.get("caption_rules", [])
+    
+    try:
+        chat_info = await user.get_chat(start_chat)
+        if getattr(chat_info, "has_protected_content", False):
+            return await original_msg.reply("❌ **Source chat is restricted!**\n`/autoforward` only works for unrestricted chats. Please use `/batch` instead.")
+    except Exception: pass 
+    
+    loading = await original_msg.reply(f"📥 **Started Auto-Forwarding...**")
+    copied = skipped = failed = 0
+    all_ids = list(range(start_id, end_id + 1))
+    
+    for i in range(0, len(all_ids), 100):
+        chunk_ids = all_ids[i:i + 100]
+        try:
+            messages = await user.get_messages(chat_id=start_chat, message_ids=chunk_ids)
+            if not isinstance(messages, list): messages = [messages]
+        except Exception:
+            failed += len(chunk_ids)
+            continue
+            
+        for chat_msg in messages:
+            if not chat_msg or chat_msg.empty:
+                skipped += 1
+                continue
+                
+            try:
+                custom_caption = chat_msg.caption or chat_msg.text or ""
+                if custom_caption:
+                    custom_caption = clean_caption(custom_caption)
+                    custom_caption = apply_caption_rules(custom_caption, caption_rules)
+                
+                kwargs = {"chat_id": target_chat, "from_chat_id": start_chat, "message_id": chat_msg.id}
+                if custom_caption: kwargs["caption"] = custom_caption
+                
+                await user.copy_message(**kwargs)
+                copied += 1
+                await asyncio.sleep(1.5) 
+            except FloodWait as e:
+                wait_s = int(getattr(e, "value", 0) or 0)
+                await asyncio.sleep(wait_s + 1)
+                failed += 1 
+            except Exception:
+                failed += 1
+                
+        await asyncio.sleep(PyroConf.FLOOD_WAIT_DELAY) 
+        
+    await loading.delete()
+    await original_msg.reply(
+        "> ✅ **Auto-Forward Completed!**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        f"📥 **Forwarded** : {copied} post(s)\n"
+        f"⏭️ **Skipped** : {skipped}\n"
+        f"❌ **Failed** : {failed}"
+    )

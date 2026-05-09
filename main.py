@@ -248,7 +248,13 @@ async def handle_any_message(bot: Client, message: Message):
     
     if user_id in WAITING_FOR_CAPTION_RULE:
         job = WAITING_FOR_CAPTION_RULE[user_id]
-        job["caption_rules"].append(f"remove_text:{message.text}")
+        
+        new_rule = f"remove_text:{message.text}"
+        if new_rule in job["caption_rules"]:
+            await message.reply("⚠️ This text is already in the removal list!")
+            return
+            
+        job["caption_rules"].append(new_rule)
 
         rules_count = len(job["caption_rules"])
         text = (

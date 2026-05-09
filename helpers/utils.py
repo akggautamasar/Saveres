@@ -23,7 +23,9 @@ from helpers.files import (
 
 from helpers.msg import (
     get_parsed_msg,
-    get_file_name
+    get_file_name,
+    clean_caption,
+    apply_caption_rules
 )
 from logger import LOGGER
 
@@ -277,7 +279,7 @@ async def send_media(
     
     return False
 
-async def download_single_media(msg, user_client, semaphore, fetch_time=None, progress_msg=None, batch_stats=None):
+async def download_single_media(msg, user_client, semaphore, fetch_time=None, progress_msg=None, batch_stats=None, caption_rules=None):
     filename = get_file_name(msg.id, msg)
     
     download_path = get_download_path(msg.id, filename)
@@ -304,6 +306,10 @@ async def download_single_media(msg, user_client, semaphore, fetch_time=None, pr
             parsed_caption = await get_parsed_msg(
                 msg.caption or "", msg.caption_entities
             )
+            
+            parsed_caption = clean_caption(parsed_caption)
+            if caption_rules:
+                parsed_caption = apply_caption_rules(parsed_caption, caption_rules)
 
             if msg.photo:
                 return ("success", media_path, InputMediaPhoto(media=media_path, caption=parsed_caption))
@@ -339,7 +345,7 @@ async def download_single_media(msg, user_client, semaphore, fetch_time=None, pr
 
     return ("skip", None, None)
 
-async def processMediaGroup(chat_message, user_client, bot, message, semaphore, progress_msg=None, batch_stats=None, target_chat_id=None):
+async def processMediaGroup(chat_message, user_client, bot, message, semaphore, progress_msg=None, batch_stats=None, target_chat_id=None, caption_rules=None):
     if target_chat_id is None:
         target_chat_id = message.chat.id
         
@@ -356,7 +362,7 @@ async def processMediaGroup(chat_message, user_client, bot, message, semaphore, 
     download_tasks = []
     for msg in media_group_messages:
         if msg.photo or msg.video or msg.document or msg.audio:
-            download_tasks.append(download_single_media(msg, user_client, semaphore, group_fetch_time, progress_msg, batch_stats))
+            download_tasks.append(download_single_media(msg, user_client, semaphore, group_fetch_time, progress_msg, batch_stats, caption_rules))
 
     results = await asyncio.gather(*download_tasks, return_exceptions=True)
 

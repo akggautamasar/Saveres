@@ -2,6 +2,7 @@ import os
 import asyncio
 from time import time
 from pyrogram import Client
+from pyrogram.enums import ParseMode
 from pyrogram.types import Message
 from pyrogram.errors import PeerIdInvalid, BadRequest, FloodWait, FileReferenceExpired
 
@@ -35,7 +36,7 @@ def track_task(coro):
 def get_running_tasks():
     return RUNNING_TASKS
 
-async def handle_download(bot: Client, user: Client, message: Message, post_url: str, pre_fetched_msg: Message = None, fetch_time: float = None, progress_msg: Message = None, batch_stats: dict = None, target_chat_id: int | str = None):
+async def handle_download(bot: Client, user: Client, message: Message, post_url: str, pre_fetched_msg: Message = None, fetch_time: float = None, progress_msg: Message = None, batch_stats: dict = None, target_chat_id: int | str = None, caption_rules: list = None):
     if target_chat_id is None:
         target_chat_id = message.chat.id
         
@@ -65,6 +66,9 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
 
         parsed_caption = await get_parsed_msg(chat_message.caption or "", chat_message.caption_entities)
         parsed_caption = clean_caption(parsed_caption)
+        if caption_rules:
+            parsed_caption = apply_caption_rules(parsed_caption, caption_rules)
+            
         safe_keyboard = extract_youtube_keyboard(chat_message.reply_markup)
         has_downloadable_media = bool(chat_message.document or chat_message.video or chat_message.audio or chat_message.photo or chat_message.animation or chat_message.voice or chat_message.video_note or chat_message.sticker)
 
@@ -76,7 +80,7 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
             elif not progress_msg:
                 progress_msg = await message.reply(get_progress_text("Media Group", "Multiple Files"))
 
-            if not await processMediaGroup(chat_message, user, bot, message, dl_sem, progress_msg, batch_stats, target_chat_id):
+            if not await processMediaGroup(chat_message, user, bot, message, dl_sem, progress_msg, batch_stats, target_chat_id, caption_rules):
                 if progress_msg:
                     try:
                         await progress_msg.edit("❌ **Failed to process Media Group**")
@@ -95,6 +99,8 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
             media_obj = chat_message.document or chat_message.video or chat_message.audio or chat_message.photo or chat_message.animation or chat_message.voice or chat_message.video_note or chat_message.sticker
             pre_file_size = getattr(media_obj, "file_size", 0) if media_obj else 0
             file_size_str = get_readable_file_size(pre_file_size)
+
+            LOGGER(__name__).info(f"Downloading media: {filename} (Size: {file_size_str})")
 
             async with dl_sem:
                 if pre_fetched_msg and fetch_time and (time() - fetch_time) > 7200:
@@ -149,9 +155,11 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
                     bot, message, media_path, media_type, parsed_caption, progress_msg, batch_stats, target_chat_id, reply_markup=safe_keyboard, message_id=message_id
                 )
 
-            if upload_success and not batch_stats and progress_msg:
-                try: await progress_msg.delete()
-                except Exception: pass
+            if upload_success:
+                if not batch_stats and progress_msg:
+                    try: await progress_msg.delete()
+                    except Exception: pass
+                LOGGER(__name__).info(f"Finished Processing: {post_url}")
 
         elif chat_message.text:
             if batch_stats:
@@ -159,8 +167,11 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
             
             parsed_text = await get_parsed_msg(chat_message.text or "", chat_message.entities)
             parsed_text = clean_caption(parsed_text)
+            if caption_rules:
+                parsed_text = apply_caption_rules(parsed_text, caption_rules)
             
             await bot.send_message(chat_id=target_chat_id, text=parsed_text, reply_markup=safe_keyboard, disable_web_page_preview=True)
+            LOGGER(__name__).info(f"Finished Processing: {post_url}")
             
     except (PeerIdInvalid, BadRequest, KeyError):
         if not batch_stats: await message.reply("**Make sure the user client is part of the chat.**")
@@ -184,6 +195,7 @@ async def execute_batch(bot: Client, user: Client, original_msg: Message, job: d
     except Exception: pass
 
     loading = await original_msg.reply(f"📥 **Started Batch Processing...**")
+    LOGGER(__name__).info(f"Batch Process Started | Range: {start_id} to {end_id}")
     try: await loading.pin(disable_notification=True, both_sides=True)
     except Exception: pass
 
@@ -233,13 +245,8 @@ async def execute_batch(bot: Client, user: Client, original_msg: Message, job: d
                     batch_stats["processed"] += 1
                     continue
 
-            if chat_msg.caption:
-                chat_msg.caption = apply_caption_rules(clean_caption(chat_msg.caption), caption_rules)
-            elif chat_msg.text:
-                chat_msg.text = apply_caption_rules(clean_caption(chat_msg.text), caption_rules)
-
             url = f"{prefix}/{chat_msg.id}"
-            task = track_task(handle_download(bot, user, original_msg, url, chat_msg, chunk_fetch_time, loading, batch_stats, target_chat))
+            task = track_task(handle_download(bot, user, original_msg, url, chat_msg, chunk_fetch_time, loading, batch_stats, target_chat, caption_rules))
             batch_tasks.append(task)
             
             if len(batch_tasks) >= PyroConf.BATCH_SIZE:
@@ -274,6 +281,7 @@ async def execute_batch(bot: Client, user: Client, original_msg: Message, job: d
     try: await loading.unpin()
     except Exception: pass
     await loading.delete()
+    LOGGER(__name__).info(f"Batch Process Completed | Downloaded: {downloaded} | Skipped: {skipped} | Failed: {failed}")
     
     await original_msg.reply(
         "> ✅ **Batch Process Completed!**\n"
@@ -295,6 +303,7 @@ async def execute_autoforward(bot: Client, user: Client, original_msg: Message, 
     except Exception: pass 
     
     loading = await original_msg.reply(f"📥 **Started Auto-Forwarding...**")
+    LOGGER(__name__).info(f"Auto-Forward Process Started | Range: {start_id} to {end_id}")
     copied = skipped = failed = 0
     all_ids = list(range(start_id, end_id + 1))
     
@@ -313,13 +322,20 @@ async def execute_autoforward(bot: Client, user: Client, original_msg: Message, 
                 continue
                 
             try:
-                custom_caption = chat_msg.caption or chat_msg.text or ""
-                if custom_caption:
+                raw_text = chat_msg.caption or chat_msg.text or ""
+                entities = chat_msg.caption_entities or chat_msg.entities
+                
+                if raw_text:
+                    custom_caption = await get_parsed_msg(raw_text, entities)
                     custom_caption = clean_caption(custom_caption)
                     custom_caption = apply_caption_rules(custom_caption, caption_rules)
+                else:
+                    custom_caption = ""
                 
                 kwargs = {"chat_id": target_chat, "from_chat_id": start_chat, "message_id": chat_msg.id}
-                if custom_caption: kwargs["caption"] = custom_caption
+                if custom_caption: 
+                    kwargs["caption"] = custom_caption
+                    kwargs["parse_mode"] = ParseMode.MARKDOWN
                 
                 await user.copy_message(**kwargs)
                 copied += 1
@@ -328,12 +344,14 @@ async def execute_autoforward(bot: Client, user: Client, original_msg: Message, 
                 wait_s = int(getattr(e, "value", 0) or 0)
                 await asyncio.sleep(wait_s + 1)
                 failed += 1 
-            except Exception:
+            except Exception as e:
+                LOGGER(__name__).error(f"Auto-forward failed for {chat_msg.id}: {e}")
                 failed += 1
                 
         await asyncio.sleep(PyroConf.FLOOD_WAIT_DELAY) 
         
     await loading.delete()
+    LOGGER(__name__).info(f"Auto-Forward Completed | Copied: {copied} | Skipped: {skipped} | Failed: {failed}")
     await original_msg.reply(
         "> ✅ **Auto-Forward Completed!**\n"
         "━━━━━━━━━━━━━━━━━━━\n"

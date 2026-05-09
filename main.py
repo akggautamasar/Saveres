@@ -29,7 +29,8 @@ from helpers.msg import (
     get_file_name,
     get_parsed_msg,
     clean_caption,
-    extract_youtube_keyboard
+    extract_youtube_keyboard,
+    apply_caption_rules
 )
 
 from config import PyroConf
@@ -59,6 +60,8 @@ download_semaphore = None
 upload_semaphore = None
 BATCH_JOBS = {}
 WAITING_FOR_CHANNEL = {}
+WAITING_FOR_FORWARD_DEST = {}
+WAITING_FOR_CAPTION_RULE = {}
 
 def get_semaphores():
     global download_semaphore, upload_semaphore
@@ -98,6 +101,9 @@ async def help_command(_, message: Message):
         "> `/batch <start_url> <end_url> [filter]`\n"
         ">  Filters: video, doc, photo, audio\n"
         "> Example: `/batch .../10 .../20 video`\n\n"
+        "**Auto-Forward**\n"
+        "> `/autoforward <start_link> <end_link>`\n"
+        "> Quickly forward content between unrestricted channels.\n\n"
         "**Controls**\n"
         "> `/stop` | `/stats` | `/logs`\n\n"
         "**Requirements**\n"
@@ -462,7 +468,7 @@ async def execute_batch(bot: Client, original_msg: Message, job: dict, target_ch
     processed_media_groups = set()
     
     all_ids = list(range(start_id, end_id + 1))
-    chunk_size = 200
+    chunk_size = 100
     
     total_links = len(all_ids)
     batch_stats = {"total": total_links, "processed": 0}
@@ -593,7 +599,118 @@ async def execute_batch(bot: Client, original_msg: Message, job: dict, target_ch
         f"❌ **Failed** : {failed} error(s)"
     )
 
-@bot.on_message(filters.private & filters.text & ~filters.command(["start", "help", "dl", "stats", "logs", "stop"]))
+@bot.on_message(filters.command(["autoforward"]) & filters.private)
+async def auto_forward_init(bot: Client, message: Message):
+    args = message.text.split()
+    if len(args) < 3 or not all(arg.startswith("https://t.me/") for arg in args[1:3]):
+        return await message.reply(
+            "🚀 **Auto-Forward**\n"
+            "> `/autoforward <start_link> <end_link>`\n\n"
+            "⚠️ *Ensure the user session has forward rights!*"
+        )
+    
+    try:
+        start_chat, start_id = getChatMsgID(args[1])
+        end_chat, end_id = getChatMsgID(args[2])
+    except Exception as e:
+        return await message.reply(f"**❌ Error parsing links:\n{e}**")
+    
+    if start_chat != end_chat:
+        return await message.reply("**❌ Both links must be from the same channel.**")
+    if start_id > end_id:
+        return await message.reply("**❌ Invalid range: start ID cannot exceed end ID.**")
+    
+    job = {
+        "start_chat": start_chat,
+        "start_id": start_id,
+        "end_id": end_id,
+        "original_message": message
+    }
+    
+    WAITING_FOR_FORWARD_DEST[message.from_user.id] = job
+    await message.reply("**Please send me a post link from your target channel.**")
+
+async def execute_autoforward(bot: Client, original_msg: Message, job: dict):
+    start_chat = job["start_chat"]
+    target_chat = job["target_chat"]
+    start_id = job["start_id"]
+    end_id = job["end_id"]
+    caption_rule = job.get("caption_rule", "keep")
+    
+    try:
+        chat_info = await user.get_chat(start_chat)
+        if getattr(chat_info, "has_protected_content", False):
+            return await original_msg.reply("❌ **Source chat is restricted!**\n`/autoforward` only works for unrestricted chats. Please use `/batch` instead.")
+    except Exception:
+        pass 
+    
+    loading = await original_msg.reply(f"📥 **Started Auto-Forwarding...**")
+    copied = skipped = failed = 0
+    all_ids = list(range(start_id, end_id + 1))
+    chunk_size = 100
+    
+    for i in range(0, len(all_ids), chunk_size):
+        chunk_ids = all_ids[i:i + chunk_size]
+        try:
+            messages = await user.get_messages(chat_id=start_chat, message_ids=chunk_ids)
+            if not isinstance(messages, list): messages = [messages]
+        except Exception:
+            failed += len(chunk_ids)
+            continue
+            
+        for chat_msg in messages:
+            if not chat_msg or chat_msg.empty:
+                skipped += 1
+                continue
+                
+            try:
+                custom_caption = chat_msg.caption or chat_msg.text or ""
+                if custom_caption:
+                    custom_caption = clean_caption(custom_caption)
+                    custom_caption = apply_caption_rules(custom_caption, caption_rule)
+                
+                kwargs = {"chat_id": target_chat, "from_chat_id": start_chat, "message_id": chat_msg.id}
+                if custom_caption:
+                    kwargs["caption"] = custom_caption
+                
+                await user.copy_message(**kwargs)
+                copied += 1
+                await asyncio.sleep(1.5) 
+            except FloodWait as e:
+                wait_s = int(getattr(e, "value", 0) or 0)
+                await asyncio.sleep(wait_s + 1)
+                failed += 1 
+            except Exception:
+                failed += 1
+                
+        await asyncio.sleep(PyroConf.FLOOD_WAIT_DELAY) 
+        
+    await loading.delete()
+    await original_msg.reply(
+        "> ✅ **Auto-Forward Completed!**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        f"📥 **Forwarded** : {copied} post(s)\n"
+        f"⏭️ **Skipped** : {skipped}\n"
+        f"❌ **Failed** : {failed}"
+    )
+
+@bot.on_callback_query(filters.regex(r"^cap_(keep|rm1|rm2)_(\d+)$"))
+async def caption_rule_callback(bot: Client, callback_query: CallbackQuery):
+    rule = callback_query.matches[0].group(1)
+    user_id = callback_query.from_user.id
+    
+    if user_id not in WAITING_FOR_CAPTION_RULE:
+        return await callback_query.answer("Session expired or invalid.", show_alert=True)
+    
+    job = WAITING_FOR_CAPTION_RULE.pop(user_id)
+    await callback_query.message.delete()
+    
+    rule_map = {"keep": "keep", "rm1": "remove_1", "rm2": "remove_2"}
+    job["caption_rule"] = rule_map[rule]
+    
+    await track_task(execute_autoforward(bot, job["original_message"], job))
+
+@bot.on_message(filters.private & filters.text & ~filters.command(["start", "help", "dl", "stats", "logs", "stop", "autoforward", "batch"]))
 async def handle_any_message(bot: Client, message: Message):
     user_id = message.from_user.id
 
@@ -604,6 +721,44 @@ async def handle_any_message(bot: Client, message: Message):
             await track_task(execute_batch(bot, job["original_message"], job, target_chat_id))
         except Exception as e:
             await message.reply(f"**❌ Error parsing target link:\n{e}**")
+        return
+
+    if user_id in WAITING_FOR_FORWARD_DEST:
+        job = WAITING_FOR_FORWARD_DEST.pop(user_id)
+        try:
+            target_chat_id, _ = getChatMsgID(message.text)
+            job["target_chat"] = target_chat_id
+        except Exception as e:
+            return await message.reply(f"**❌ Error parsing target link:\n{e}**")
+        
+        try:
+            first_msg = await user.get_messages(chat_id=job["start_chat"], message_ids=job["start_id"])
+            caption = first_msg.caption or first_msg.text or ""
+        except Exception:
+            caption = ""
+        
+        if caption:
+            WAITING_FOR_CAPTION_RULE[user_id] = job
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("Default", callback_data=f"cap_keep_{message.id}")],
+                [InlineKeyboardButton("Trim Last Line", callback_data=f"cap_rm1_{message.id}")],
+                [InlineKeyboardButton("Trim Last 2 Lines", callback_data=f"cap_rm2_{message.id}")]
+            ])
+            job["original_message_id"] = message.id 
+            await message.reply(
+                f"**Message caption:**\n\n`{caption}`\n\n"
+                "Reply to this with the exact text you want to remove!)*", 
+                reply_markup=keyboard
+            )
+        else:
+            job["caption_rule"] = "keep"
+            await track_task(execute_autoforward(bot, job["original_message"], job))
+        return
+    
+    if user_id in WAITING_FOR_CAPTION_RULE:
+        job = WAITING_FOR_CAPTION_RULE.pop(user_id)
+        job["caption_rule"] = f"remove_text:{message.text}"
+        await track_task(execute_autoforward(bot, job["original_message"], job))
         return
 
     if re.search(r"t\.me\/", message.text):
@@ -621,23 +776,30 @@ async def download_media(bot: Client, message: Message):
 @bot.on_message(filters.command("stats") & filters.private)
 async def stats(_, message: Message):
     currentTime = get_readable_time(time() - PyroConf.BOT_START_TIME)
-    total, used, free = shutil.disk_usage(".")
+    
+    def get_sys_stats():
+        t, u, f = shutil.disk_usage(".")
+        s = psutil.net_io_counters().bytes_sent
+        r = psutil.net_io_counters().bytes_recv
+        c = psutil.cpu_percent(interval=0.5)
+        m = psutil.virtual_memory().percent
+        d = psutil.disk_usage("/").percent
+        mem_mb = round(psutil.Process(os.getpid()).memory_info()[0] / 1024**2)
+        return t, u, f, s, r, c, m, d, mem_mb
+
+    total, used, free, sent, recv, cpuUsage, memory, disk, proc_mem = await asyncio.to_thread(get_sys_stats)
+    
     total = get_readable_file_size(total)
-    used = get_readable_file_size(used)
     free = get_readable_file_size(free)
-    sent = get_readable_file_size(psutil.net_io_counters().bytes_sent)
-    recv = get_readable_file_size(psutil.net_io_counters().bytes_recv)
-    cpuUsage = psutil.cpu_percent(interval=0.5)
-    memory = psutil.virtual_memory().percent
-    disk = psutil.disk_usage("/").percent
-    process = psutil.Process(os.getpid())
+    sent = get_readable_file_size(sent)
+    recv = get_readable_file_size(recv)
 
     stats = (
         "**Bot's Live and Running Successfully.**\n\n"
         f"**➜ Bot Uptime:** {currentTime}\n"
         f"**➜ Free Disk Space:** {free}\n"
         f"**➜ Total Disk Space:** {total}\n"
-        f"**➜ Memory Usage:** {round(process.memory_info()[0] / 1024**2)} MiB\n\n"
+        f"**➜ Memory Usage:** {proc_mem} MiB\n\n"
         f"**➜ Uploaded:** {sent}\n"
         f"**➜ Downloaded:** {recv}\n\n"
         f"**➜ CPU:** {cpuUsage}% | "

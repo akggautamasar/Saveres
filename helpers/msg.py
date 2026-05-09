@@ -10,16 +10,27 @@ PREFIX_NUM_SPACE_RE = re.compile(r'^\d+ ')
 def clean_caption(caption: str) -> str:
     if not caption:
         return ""
-
-    def defang_link(match):
-        prefix = match.group(1)
-        rest = match.group(2)
-        return f"`{prefix}[REMOVE]{rest}`"
-
-    pattern = r'(https?://|www\.|t\.me/|telegram\.me/|chat\.whatsapp\.com/|@)(\w\S*)'
-    caption = re.sub(pattern, defang_link, caption, flags=re.IGNORECASE)
+    pattern = r'(https?://|www\.|t\.me/|telegram\.me/|chat\.whatsapp\.com/|@)(\w\S*)\s*'
+    caption = re.sub(pattern, '', caption, flags=re.IGNORECASE)
     
     return caption.strip()
+
+def apply_caption_rules(caption: str, rule: str) -> str:
+    if not caption: 
+        return ""
+    if rule == "keep": 
+        return caption
+    
+    lines = caption.split('\n')
+    if rule == "remove_1" and len(lines) > 0:
+        lines = lines[:-1]
+    elif rule == "remove_2" and len(lines) > 1:
+        lines = lines[:-2]
+    elif rule.startswith("remove_text:"):
+        text_to_remove = rule.split("remove_text:", 1)[1]
+        return caption.replace(text_to_remove, "").strip()
+    
+    return '\n'.join(lines).strip()
 
 def extract_youtube_keyboard(reply_markup) -> InlineKeyboardMarkup | None:
     if not reply_markup or not hasattr(reply_markup, 'inline_keyboard'):

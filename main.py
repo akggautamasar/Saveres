@@ -45,7 +45,7 @@ async def trigger_caption_setup(bot: Client, user: Client, message: Message, job
             msg_obj = await user.get_messages(chat_id=job["start_chat"], message_ids=msg_id)
             if msg_obj and not getattr(msg_obj, "empty", True):
                 raw_text = msg_obj.caption or msg_obj.text
-                if raw_text and len(raw_text.strip()) > 5:
+                if raw_text and len(raw_text.strip()) > 50 and '\n' in raw_text:
                     sample_caption = await get_parsed_msg(raw_text, msg_obj.caption_entities or msg_obj.entities)
                     break
         except Exception:
@@ -62,12 +62,12 @@ async def trigger_caption_setup(bot: Client, user: Client, message: Message, job
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("Trim Last Line", callback_data=f"cap_rm1_{message.id}")],
             [InlineKeyboardButton("Trim Last 2 Lines", callback_data=f"cap_rm2_{message.id}")],
-            [InlineKeyboardButton("✅ Done & Start Processing", callback_data=f"cap_done_{message.id}")]
+            [InlineKeyboardButton("✅ Start", callback_data=f"cap_done_{message.id}")]
         ])
         
         text = (
             f"**Current Caption:**\n\n`{sample_caption[:300]}...`\n\n"
-            "✂️ To remove specific text, reply to this message with that text. You can also add multiple rules!\n\n"
+            "🔄 To clean up a caption reply to the message with the exact text you'd like to remove!\n\n"
             f"> 🎯 **Active Rules:** 0 applied"
         )
         
@@ -95,7 +95,7 @@ async def start(_, message: Message):
 @bot.on_message(filters.command("help") & filters.private)
 async def help_command(_, message: Message):
     help_text = (
-        "💡 **Bot Commands & Usage Guide**\n\n"
+        "💡 **Bot Commands**\n\n"
         "📥 **Single Posts**\n"
         "• Paste any restricted post link directly, or use:\n"
         "`/dl <post_link>`\n\n"
@@ -107,7 +107,7 @@ async def help_command(_, message: Message):
         "⚡ **Auto-Forwarding**\n"
         "`/autoforward <from_chat_link> <to_chat_link>`\n\n"
         "✍️ **Caption Editing**\n"
-        "• Batch & Auto-Forward modes will automatically prompt you with interactive buttons to clean captions.\n\n"
+        "• Interactive buttons to clean captions.\n\n"
         "⚙️ **System Controls**\n"
         "• `/stop` - Cancel active tasks\n"
         "• `/stats` - Check bot performance\n"
@@ -165,7 +165,7 @@ async def batch_destination_callback(bot: Client, callback_query: CallbackQuery)
         await trigger_caption_setup(bot, user, callback_query.message, job)
     elif action == "chan":
         WAITING_FOR_DEST[callback_query.from_user.id] = job
-        await job["original_message"].reply("🔗 Please send any post link from the target channel.")
+        await job["original_message"].reply("🔗 Send a post link from the target channel.")
 
 @bot.on_message(filters.command(["autoforward"]) & filters.private)
 async def auto_forward_init(bot: Client, message: Message):
@@ -191,7 +191,7 @@ async def auto_forward_init(bot: Client, message: Message):
     }
     
     WAITING_FOR_DEST[message.from_user.id] = job
-    await message.reply("🔗 Please send a post link from the target channel.")
+    await message.reply("🔗 Send a post link from the target channel.")
 
 @bot.on_callback_query(filters.regex(r"^cap_(rm1|rm2|done)_(\d+)$"))
 async def caption_rule_callback(bot: Client, callback_query: CallbackQuery):
@@ -224,7 +224,7 @@ async def caption_rule_callback(bot: Client, callback_query: CallbackQuery):
     rules_count = len(job["caption_rules"])
     text = (
         f"**Current Caption:**\n\n`{job['sample_caption'][:300]}...`\n\n"
-        "🔄 Want to clean up a caption? Just reply to the message with the exact text you'd like to remove!\n\n"
+        "🔄 To clean up a caption reply to the message with the exact text you'd like to remove!\n\n"
         f"> 🎯 **Active Rules:** {rules_count} applied"
     )
     
@@ -259,7 +259,7 @@ async def handle_any_message(bot: Client, message: Message):
         rules_count = len(job["caption_rules"])
         text = (
             f"**Current Caption:**\n\n`{job['sample_caption'][:300]}...`\n\n"
-            "🔄 Want to clean up a caption? Just reply to the message with the exact text you'd like to remove!\n\n"
+            "🔄 To clean up a caption reply to the message with the exact text you'd like to remove!\n\n"
             f"> 🎯 **Active Rules:** {rules_count} applied"
         )
         try:
@@ -270,12 +270,12 @@ async def handle_any_message(bot: Client, message: Message):
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("Trim Last Line", callback_data=f"cap_rm1_{job['original_message_id']}")],
                     [InlineKeyboardButton("Trim Last 2 Lines", callback_data=f"cap_rm2_{job['original_message_id']}")],
-                    [InlineKeyboardButton("✅ Done & Start Processing", callback_data=f"cap_done_{job['original_message_id']}")]
+                    [InlineKeyboardButton("✅ Start", callback_data=f"cap_done_{job['original_message_id']}")]
                 ])
             )
         except Exception: pass
         
-        await message.reply("✅ **Text rule added.** You can add more text to remove, or click **Done** on the menu above.")
+        await message.reply("✅ **Text rule added.** You can add more text to remove, or click **Start** on the menu.")
         return
 
     if re.search(r"t\.me\/", message.text):

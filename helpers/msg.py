@@ -11,18 +11,26 @@ def clean_caption(caption: str) -> str:
     if not caption:
         return ""
 
-    caption = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', caption)
-    caption = re.sub(r'\]\([^)]+\)', '', caption)
+    def handle_markdown_links(match):
+        text = match.group(1)
+        url = match.group(2)
+        
+        if re.search(r'(?:t\.me|telegram\.me)/.+/\d+', url, re.IGNORECASE):
+            return match.group(0) 
+        else:
+            return text 
+            
+    caption = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', handle_markdown_links, caption)
     caption = re.sub(r'@([a-zA-Z0-9_]+)', r'(at)\1', caption)
     
-    def defang_link(match):
+    def defang_bare_link(match):
         url = match.group(0)
-        if re.search(r'(?:t\.me|telegram\.me).*/\d+(?:\?[^\s]*)?$', url, re.IGNORECASE):
+        if re.search(r'(?:t\.me|telegram\.me)/.+/\d+', url, re.IGNORECASE):
             return url 
         return url.replace('.', '(dot)')
         
     pattern = r'(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me|chat\.whatsapp\.com)\S+'
-    caption = re.sub(pattern, defang_link, caption, flags=re.IGNORECASE)
+    caption = re.sub(pattern, defang_bare_link, caption, flags=re.IGNORECASE)
     
     return caption.strip()
 

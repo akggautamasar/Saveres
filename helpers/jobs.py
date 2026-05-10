@@ -281,12 +281,12 @@ async def execute_batch(bot: Client, user: Client, original_msg: Message, job: d
     try: await loading.unpin()
     except Exception: pass
     await loading.delete()
-    LOGGER(__name__).info(f"Batch Process Completed | Downloaded: {downloaded} | Skipped: {skipped} | Failed: {failed}")
+    LOGGER(__name__).info(f"Batch Process Completed | Total: {downloaded} | Skipped: {skipped} | Failed: {failed}")
     
     await original_msg.reply(
         "> ✅ **Batch Process Completed!**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        f"📥 **Downloaded** : {downloaded} post(s)\n"
+        f"📥 **Total** : {downloaded} post(s)\n"
         f"⏭️ **Skipped** : {skipped} (filtered)\n"
         f"❌ **Failed** : {failed} error(s)"
     )
@@ -351,11 +351,11 @@ async def execute_autoforward(bot: Client, user: Client, original_msg: Message, 
         await asyncio.sleep(PyroConf.FLOOD_WAIT_DELAY) 
         
     await loading.delete()
-    LOGGER(__name__).info(f"Auto-Forward Completed | Copied: {copied} | Skipped: {skipped} | Failed: {failed}")
+    LOGGER(__name__).info(f"Auto-Forward Completed | Total: {copied} | Skipped: {skipped} | Failed: {failed}")
     await original_msg.reply(
         "> ✅ **Auto-Forward Completed!**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        f"📥 **Forwarded** : {copied} post(s)\n"
+        f"📥 **Total** : {copied} post(s)\n"
         f"⏭️ **Skipped** : {skipped}\n"
         f"❌ **Failed** : {failed}"
     )

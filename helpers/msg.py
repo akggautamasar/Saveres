@@ -10,12 +10,19 @@ PREFIX_NUM_SPACE_RE = re.compile(r'^\d+ ')
 def clean_caption(caption: str) -> str:
     if not caption:
         return ""
-    
+
     caption = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', caption)
     caption = re.sub(r'\]\([^)]+\)', '', caption)
-    pattern = r'(?:https?://|www\.|t\.me/|telegram\.me/|chat\.whatsapp\.com/|@)\S+'
-    caption = re.sub(pattern, '', caption, flags=re.IGNORECASE)
-    caption = re.sub(r'https?://\s*', '', caption, flags=re.IGNORECASE)
+    caption = re.sub(r'@([a-zA-Z0-9_]+)', r'(at)\1', caption)
+    
+    def defang_link(match):
+        url = match.group(0)
+        if re.search(r'(?:t\.me|telegram\.me).*/\d+(?:\?[^\s]*)?$', url, re.IGNORECASE):
+            return url 
+        return url.replace('.', '(dot)')
+        
+    pattern = r'(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me|chat\.whatsapp\.com)\S+'
+    caption = re.sub(pattern, defang_link, caption, flags=re.IGNORECASE)
     
     return caption.strip()
 
@@ -35,6 +42,7 @@ def apply_caption_rules(caption: str, rules: list) -> str:
             caption = '\n'.join(lines[:-2]).strip()
         elif rule.startswith("remove_text:"):
             text_to_remove = rule.split("remove_text:", 1)[1]
+            
             caption = caption.replace(text_to_remove, "")
             caption = re.sub(r'[ \t]{2,}', ' ', caption)
             caption = re.sub(r' \.', '.', caption)

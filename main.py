@@ -324,6 +324,14 @@ async def cancel_all_tasks(_, message: Message):
     await message.reply(f"**Cancelled {cancelled} running task(s).**")
 
 if __name__ == "__main__":
+    if os.path.exists("downloads"):
+        try:
+            shutil.rmtree("downloads")
+            LOGGER(__name__).info("Cleaned up orphaned files in downloads folder.")
+        except Exception as e:
+            LOGGER(__name__).error(f"Failed to clean downloads directory: {e}")
+    os.makedirs("downloads", exist_ok=True)
+
     LOGGER(__name__).info("Bot Started!")
     try: compose([bot, user])
     except KeyboardInterrupt: pass

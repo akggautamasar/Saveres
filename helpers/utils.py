@@ -184,6 +184,8 @@ async def send_media(
         
     filename = os.path.basename(media_path)
     file_size_str = get_readable_file_size(file_size) if file_size else "Unknown Size"
+    
+    LOGGER(__name__).info(f"Uploading media: {filename} (Size: {file_size_str})")
 
     async def _send_once():
         if media_type == "photo":

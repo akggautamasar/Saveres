@@ -14,6 +14,7 @@ from logger import LOGGER
 from helpers.files import get_readable_file_size, get_readable_time
 from helpers.msg import getChatMsgID, get_parsed_msg
 from helpers.jobs import execute_batch, execute_autoforward, handle_download, track_task, get_running_tasks
+from helpers.keyboards import get_start_keyboard, get_caption_keyboard, get_filter_keyboard
 
 bot = Client(
     "media_bot",
@@ -37,6 +38,8 @@ user = Client(
 BATCH_JOBS = {}
 WAITING_FOR_DEST = {}
 WAITING_FOR_CAPTION_RULE = {}
+LINK_CACHE = {} 
+FILTER_STATE = {}
 
 async def trigger_caption_setup(bot: Client, user: Client, message: Message, job: dict):
     sample_caption = ""
@@ -59,19 +62,13 @@ async def trigger_caption_setup(bot: Client, user: Client, message: Message, job
         WAITING_FOR_CAPTION_RULE[user_id] = job
         job["original_message_id"] = message.id 
         
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Trim Last Line", callback_data=f"cap_rm1_{message.id}")],
-            [InlineKeyboardButton("Trim Last 2 Lines", callback_data=f"cap_rm2_{message.id}")],
-            [InlineKeyboardButton("✅ Start", callback_data=f"cap_done_{message.id}")]
-        ])
-        
         text = (
             f"**Current Caption:**\n\n`{sample_caption[:300]}...`\n\n"
             "🔄 To clean up a caption reply to the message with the exact text you'd like to remove!\n\n"
             f"> 🎯 **Active Rules:** 0 applied"
         )
         
-        msg = await message.reply(text, reply_markup=keyboard)
+        msg = await message.reply(text, reply_markup=get_caption_keyboard(message.id))
         job["menu_message_id"] = msg.id
     else:
         job["caption_rules"] = ["keep"]
@@ -86,9 +83,9 @@ async def start(_, message: Message):
         "🤖 **Welcome to Save Restricted Bot!**\n\n"
         "I can help you download media from restricted channels and set up auto-forwarding. 🚀\n\n"
         "⚙️ **How to use:**\n"
-        "• Just send me any Telegram post link!\n"
-        "• Use `/help` to see all commands & examples.\n\n"
-        "⚠️ Note: Make sure your user client is already a member of the target chat."
+        "• Just paste any Telegram post link directly in this chat to get started.\n"
+        "• Use `/help` to see advanced commands.\n\n"
+        "⚠️ Make sure your user client is already a member of the target chat."
     )
     await message.reply(welcome_text, disable_web_page_preview=True)
 
@@ -97,17 +94,11 @@ async def help_command(_, message: Message):
     help_text = (
         "💡 **Bot Commands**\n\n"
         "📥 **Single Posts**\n"
-        "• Paste any restricted post link directly, or use:\n"
-        "`/dl <post_link>`\n\n"
+        "• Paste any restricted post link directly in the chat.\n\n"
         "📦 **Batch Downloads**\n"
-        "• Download a range of restricted posts with optional media filters:\n"
-        "`/batch <start_url> <end_url> [filter]`\n"
-        "• Filters: `video`, `doc`, `photo`, `audio`\n"
-        "• Example: `/batch .../10 .../20 video`\n\n"
+        "• Type `/batch <start_url>` to initiate a batch download manually.\n\n"
         "⚡ **Auto-Forwarding**\n"
         "`/autoforward <from_chat_link> <to_chat_link>`\n\n"
-        "✍️ **Caption Editing**\n"
-        "• Interactive buttons to clean captions.\n\n"
         "⚙️ **System Controls**\n"
         "• `/stop` - Cancel active tasks\n"
         "• `/stats` - Check bot performance\n"
@@ -117,37 +108,80 @@ async def help_command(_, message: Message):
     await message.reply(help_text, disable_web_page_preview=True)
 
 @bot.on_message(filters.command("batch") & filters.private)
-async def download_range(bot: Client, message: Message):
+async def batch_command(bot: Client, message: Message):
     args = message.text.split()
-    if len(args) < 3 or not all(arg.startswith("https://t.me/") for arg in args[1:3]):
-        return await message.reply("🚀**Batch Download**\n> `/batch start_link end_link [filter]`")
+    if len(args) < 2 or not args[1].startswith("https://t.me/"):
+        return await message.reply("🚀 **Batch Download**\n> `/batch start_link`")
+    LINK_CACHE[message.from_user.id] = args[1]
+    await message.reply("🔗 Send the **ending post link** to establish the range.")
+    WAITING_FOR_DEST[message.from_user.id] = {"action": "wait_batch_end"}
 
-    filter_type = args[3].lower() if len(args) > 3 else "all"
+@bot.on_callback_query(filters.regex(r"^menu_(single|batch|auto)$"))
+async def main_menu_callback(bot: Client, callback_query: CallbackQuery):
+    action = callback_query.matches[0].group(1)
+    user_id = callback_query.from_user.id
+    
+    if user_id not in LINK_CACHE:
+        return await callback_query.answer("Session expired. Please send the link again.", show_alert=True)
+    
+    link = LINK_CACHE[user_id]
+    await callback_query.message.delete()
+    
+    if action == "single":
+        await track_task(handle_download(bot, user, callback_query.message, link))
+        LINK_CACHE.pop(user_id, None)
+        
+    elif action == "batch":
+        WAITING_FOR_DEST[user_id] = {"action": "wait_batch_end"}
+        await callback_query.message.reply("🔗 Send the **ending post link** to establish the range.")
+        
+    elif action == "auto":
+        WAITING_FOR_DEST[user_id] = {"action": "wait_auto_end"}
+        await callback_query.message.reply("🔗 Send the **ending post link** to establish the range.")
 
-    try:
-        start_chat, start_id = getChatMsgID(args[1])
-        end_chat, end_id = getChatMsgID(args[2])
-    except Exception as e:
-        return await message.reply(f"**❌ Error parsing links:\n{e}**")
-
-    if start_chat != end_chat: return await message.reply("**❌ Both links must be from the same channel.**")
-    if start_id > end_id: return await message.reply("**❌ Invalid range.**")
-
-    BATCH_JOBS[message.id] = {
-        "start_chat": start_chat,
-        "start_id": start_id,
-        "end_id": end_id,
-        "filter_type": filter_type,
-        "prefix": args[1].rsplit("/", 1)[0],
-        "job_type": "batch",
-        "original_message": message
-    }
-
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Bot Chat", callback_data=f"batch_bot_{message.id}"),
-         InlineKeyboardButton("Channel", callback_data=f"batch_chan_{message.id}")]
-    ])
-    await message.reply("Where do you want to forward the media?", reply_markup=keyboard)
+@bot.on_callback_query(filters.regex(r"^filter_([a-z]+)_(\d+)$"))
+async def filter_menu_callback(bot: Client, callback_query: CallbackQuery):
+    selection = callback_query.matches[0].group(1)
+    msg_id = int(callback_query.matches[0].group(2))
+    
+    if msg_id not in BATCH_JOBS:
+        return await callback_query.answer("Session expired.", show_alert=True)
+        
+    job = BATCH_JOBS[msg_id]
+    current_filters = FILTER_STATE.get(msg_id, [])
+    
+    if selection == "all":
+        job["filter_type"] = ["all"]
+        FILTER_STATE.pop(msg_id, None)
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Bot Chat", callback_data=f"batch_bot_{msg_id}"),
+             InlineKeyboardButton("Channel / Topic", callback_data=f"batch_chan_{msg_id}")]
+        ])
+        return await callback_query.message.edit_text("Where do you want to forward the media?", reply_markup=keyboard)
+        
+    if selection == "done":
+        job["filter_type"] = current_filters if current_filters else ["all"]
+        FILTER_STATE.pop(msg_id, None)
+        
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Bot Chat", callback_data=f"batch_bot_{msg_id}"),
+             InlineKeyboardButton("Channel / Topic", callback_data=f"batch_chan_{msg_id}")]
+        ])
+        return await callback_query.message.edit_text("Where do you want to forward the media?", reply_markup=keyboard)
+        
+    if "all" in current_filters: 
+        current_filters.remove("all")
+        
+    if selection in current_filters:
+        current_filters.remove(selection)
+    else:
+        current_filters.append(selection)
+        
+    if len(current_filters) >= 4:
+        current_filters = []
+            
+    FILTER_STATE[msg_id] = current_filters
+    await callback_query.message.edit_reply_markup(reply_markup=get_filter_keyboard(current_filters, msg_id))
 
 @bot.on_callback_query(filters.regex(r"^batch_(bot|chan)_(\d+)$"))
 async def batch_destination_callback(bot: Client, callback_query: CallbackQuery):
@@ -162,36 +196,20 @@ async def batch_destination_callback(bot: Client, callback_query: CallbackQuery)
 
     if action == "bot":
         job["target_chat"] = callback_query.message.chat.id
+        job["target_topic"] = None
         await trigger_caption_setup(bot, user, callback_query.message, job)
     elif action == "chan":
         WAITING_FOR_DEST[callback_query.from_user.id] = job
-        await job["original_message"].reply("🔗 Send a post link from the target channel.")
+        await job["original_message"].reply("🔗 Send a post link from the target channel or topic.")
 
 @bot.on_message(filters.command(["autoforward"]) & filters.private)
 async def auto_forward_init(bot: Client, message: Message):
     args = message.text.split()
-    if len(args) < 3 or not all(arg.startswith("https://t.me/") for arg in args[1:3]):
-        return await message.reply("🚀 **Auto-Forward**\n> `/autoforward <start_link> <end_link>`")
-    
-    try:
-        start_chat, start_id = getChatMsgID(args[1])
-        end_chat, end_id = getChatMsgID(args[2])
-    except Exception as e:
-        return await message.reply(f"**❌ Error parsing links:\n{e}**")
-    
-    if start_chat != end_chat: return await message.reply("**❌ Both links must be from the same channel.**")
-    if start_id > end_id: return await message.reply("**❌ Invalid range.**")
-    
-    job = {
-        "start_chat": start_chat,
-        "start_id": start_id,
-        "end_id": end_id,
-        "job_type": "autoforward",
-        "original_message": message
-    }
-    
-    WAITING_FOR_DEST[message.from_user.id] = job
-    await message.reply("🔗 Send a post link from the target channel.")
+    if len(args) < 2 or not args[1].startswith("https://t.me/"):
+        return await message.reply("🚀 **Auto-Forward**\n> `/autoforward <start_link>`")
+    LINK_CACHE[message.from_user.id] = args[1]
+    WAITING_FOR_DEST[message.from_user.id] = {"action": "wait_auto_end"}
+    await message.reply("🔗 Send the **ending post link** to establish the range.")
 
 @bot.on_callback_query(filters.regex(r"^cap_(rm1|rm2|done)_(\d+)$"))
 async def caption_rule_callback(bot: Client, callback_query: CallbackQuery):
@@ -229,18 +247,57 @@ async def caption_rule_callback(bot: Client, callback_query: CallbackQuery):
     )
     
     try:
-        await callback_query.message.edit_text(text, reply_markup=callback_query.message.reply_markup)
+        await callback_query.message.edit_text(text, reply_markup=get_caption_keyboard(job['original_message_id']))
     except Exception: pass
 
-@bot.on_message(filters.private & filters.text & ~filters.command(["start", "help", "dl", "stats", "logs", "stop", "autoforward", "batch"]))
+@bot.on_message(filters.private & filters.text & ~filters.command(["start", "help", "stats", "logs", "stop", "autoforward", "batch"]))
 async def handle_any_message(bot: Client, message: Message):
     user_id = message.from_user.id
 
     if user_id in WAITING_FOR_DEST:
         job = WAITING_FOR_DEST.pop(user_id)
+        
+        if "action" in job:
+            start_link = LINK_CACHE.get(user_id)
+            end_link = message.text
+            
+            try:
+                start_chat, start_id, _ = getChatMsgID(start_link)
+                end_chat, end_id, _ = getChatMsgID(end_link)
+            except Exception as e:
+                return await message.reply(f"**❌ Error parsing links:\n{e}**")
+                
+            if start_chat != end_chat: return await message.reply("**❌ Both links must be from the same channel.**")
+            if start_id > end_id: return await message.reply("**❌ Invalid range.**")
+            
+            if job["action"] == "wait_batch_end":
+                BATCH_JOBS[message.id] = {
+                    "start_chat": start_chat,
+                    "start_id": start_id,
+                    "end_id": end_id,
+                    "prefix": start_link.rsplit("/", 1)[0],
+                    "job_type": "batch",
+                    "original_message": message
+                }
+                FILTER_STATE[message.id] = []
+                await message.reply("🎬 **Select media types to download:**", reply_markup=get_filter_keyboard([], message.id))
+                
+            elif job["action"] == "wait_auto_end":
+                auto_job = {
+                    "start_chat": start_chat,
+                    "start_id": start_id,
+                    "end_id": end_id,
+                    "job_type": "autoforward",
+                    "original_message": message
+                }
+                WAITING_FOR_DEST[message.from_user.id] = auto_job
+                await message.reply("🔗 Send a post link from the target channel or topic.")
+            return
+
         try:
-            target_chat_id, _ = getChatMsgID(message.text)
+            target_chat_id, target_msg_id, target_topic_id = getChatMsgID(message.text)
             job["target_chat"] = target_chat_id
+            job["target_topic"] = target_topic_id 
             await trigger_caption_setup(bot, user, message, job)
         except Exception as e:
             await message.reply(f"**❌ Error parsing target link:\n{e}**")
@@ -267,11 +324,7 @@ async def handle_any_message(bot: Client, message: Message):
                 chat_id=message.chat.id, 
                 message_id=job["menu_message_id"], 
                 text=text, 
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("Trim Last Line", callback_data=f"cap_rm1_{job['original_message_id']}")],
-                    [InlineKeyboardButton("Trim Last 2 Lines", callback_data=f"cap_rm2_{job['original_message_id']}")],
-                    [InlineKeyboardButton("✅ Start", callback_data=f"cap_done_{job['original_message_id']}")]
-                ])
+                reply_markup=get_caption_keyboard(job['original_message_id'])
             )
         except Exception: pass
         
@@ -279,12 +332,8 @@ async def handle_any_message(bot: Client, message: Message):
         return
 
     if re.search(r"t\.me\/", message.text):
-        await track_task(handle_download(bot, user, message, message.text))
-
-@bot.on_message(filters.command("dl") & filters.private)
-async def download_media(bot: Client, message: Message):
-    if len(message.command) < 2: return await message.reply("**Provide a post URL after the /dl command.**")
-    await track_task(handle_download(bot, user, message, message.command[1]))
+        LINK_CACHE[user_id] = message.text
+        await message.reply("⚙️ **How do you want to proceed?**", reply_markup=get_start_keyboard())
 
 @bot.on_message(filters.command("stats") & filters.private)
 async def stats(_, message: Message):
@@ -327,7 +376,6 @@ if __name__ == "__main__":
     if os.path.exists("downloads"):
         try:
             shutil.rmtree("downloads")
-            LOGGER(__name__).info("Cleaned up orphaned files in downloads folder.")
         except Exception as e:
             LOGGER(__name__).error(f"Failed to clean downloads directory: {e}")
     os.makedirs("downloads", exist_ok=True)

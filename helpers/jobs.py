@@ -198,7 +198,8 @@ async def execute_batch(bot: Client, user: Client, original_msg: Message, job: d
             current_id = chunk_end + 1
             continue
             
-        batch_tasks = []
+        ref_expired = False
+
         for chat_msg in messages:
             if not chat_msg or chat_msg.empty:
                 skipped += 1
@@ -230,31 +231,30 @@ async def execute_batch(bot: Client, user: Client, original_msg: Message, job: d
 
             url = f"{prefix}/{chat_msg.id}"
             task = track_task(handle_download(bot, user, original_msg, url, chat_msg, loading, batch_stats, target_chat, target_topic, caption_rules))
-            batch_tasks.append((chat_msg.id, task))
             
-        if batch_tasks:
-            pending = [t for _, t in batch_tasks]
-            results = await asyncio.gather(*pending, return_exceptions=True)
-            
-            ref_expired_id = None
-            for i, result in enumerate(results):
-                msg_id = batch_tasks[i][0]
-                if isinstance(result, FileReferenceExpired) or (isinstance(result, Exception) and "FileReferenceExpired" in str(result)):
-                    if ref_expired_id is None or msg_id < ref_expired_id:
-                        ref_expired_id = msg_id
-                elif isinstance(result, asyncio.CancelledError):
-                    try: await loading.unpin()
-                    except Exception: pass
-                    await loading.delete()
-                    return await original_msg.reply(f"**❌ Batch canceled** after downloading `{downloaded}` posts.")
-                elif isinstance(result, Exception): failed += 1
-                else: downloaded += 1; rapid_file_count += 1
-
-            if ref_expired_id is not None:
-                current_id = ref_expired_id
+            try:
+                await task
+                downloaded += 1
+                rapid_file_count += 1
+            except asyncio.CancelledError:
+                try: await loading.unpin()
+                except Exception: pass
+                await loading.delete()
+                return await original_msg.reply(f"**❌ Batch canceled** after downloading `{downloaded}` posts.")
+            except FileReferenceExpired:
+                ref_expired = True
+                current_id = chat_msg.id
                 LOGGER(__name__).info(f"File reference expired at ID {current_id}. Refreshing chunk dynamically.")
                 await asyncio.sleep(2)
-                continue
+                break
+            except Exception as e:
+                if "FileReferenceExpired" in str(e):
+                    ref_expired = True
+                    current_id = chat_msg.id
+                    LOGGER(__name__).info(f"File reference expired at ID {current_id}. Refreshing chunk dynamically.")
+                    await asyncio.sleep(2)
+                    break
+                failed += 1
 
             if rapid_file_count >= PyroConf.RAPID_LIMIT:
                 elapsed = time() - rapid_window_start
@@ -265,7 +265,11 @@ async def execute_batch(bot: Client, user: Client, original_msg: Message, job: d
                     await asyncio.sleep(sleep_duration)
                 rapid_file_count, rapid_window_start = 0, time()
 
-        await asyncio.sleep(PyroConf.FLOOD_WAIT_DELAY)
+            await asyncio.sleep(PyroConf.FLOOD_WAIT_DELAY)
+
+        if ref_expired:
+            continue
+
         current_id = chunk_end + 1
 
     try: await loading.unpin()

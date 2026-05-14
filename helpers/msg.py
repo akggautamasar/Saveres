@@ -115,7 +115,7 @@ def getChatMsgID(link: str):
     if not chat_id or not message_id:
         raise ValueError("Please send a valid Telegram post URL.")
 
-    return chat_id, message_id
+    return chat_id, message_id, message_thread_id
 
 def get_file_name(message_id: int, chat_message) -> str:
     def clean_name(name):

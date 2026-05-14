@@ -36,7 +36,7 @@ def track_task(coro):
 def get_running_tasks():
     return RUNNING_TASKS
 
-async def handle_download(bot: Client, user: Client, message: Message, post_url: str, pre_fetched_msg: Message = None, fetch_time: float = None, progress_msg: Message = None, batch_stats: dict = None, target_chat_id: int | str = None, caption_rules: list = None):
+async def handle_download(bot: Client, user: Client, message: Message, post_url: str, pre_fetched_msg: Message = None, progress_msg: Message = None, batch_stats: dict = None, target_chat_id: int | str = None, target_topic_id: int = None, caption_rules: list = None):
     if target_chat_id is None:
         target_chat_id = message.chat.id
         
@@ -52,7 +52,7 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
             chat_message = pre_fetched_msg
             message_id = chat_message.id
         else:
-            chat_id, message_id = getChatMsgID(post_url)
+            chat_id, message_id, _ = getChatMsgID(post_url)
             chat_message = await user.get_messages(chat_id=chat_id, message_ids=message_id)
 
         if not chat_message or chat_message.empty:
@@ -80,7 +80,7 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
             elif not progress_msg:
                 progress_msg = await message.reply(get_progress_text("Media Group", "Multiple Files"))
 
-            if not await processMediaGroup(chat_message, user, bot, message, dl_sem, progress_msg, batch_stats, target_chat_id, caption_rules):
+            if not await processMediaGroup(chat_message, user, bot, message, dl_sem, progress_msg, batch_stats, target_chat_id, target_topic_id, caption_rules):
                 if progress_msg:
                     try:
                         await progress_msg.edit("❌ **Failed to process Media Group**")
@@ -100,19 +100,9 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
             pre_file_size = getattr(media_obj, "file_size", 0) if media_obj else 0
             file_size_str = get_readable_file_size(pre_file_size)
 
-            LOGGER(__name__).info(f"Downloading media: {filename} (Size: {file_size_str})")
-
             async with dl_sem:
-                if pre_fetched_msg and fetch_time and (time() - fetch_time) > 7200:
-                    try:
-                        chat_id, msg_id = getChatMsgID(post_url)
-                        fresh_msg = await user.get_messages(chat_id=chat_id, message_ids=msg_id)
-                        if fresh_msg and not fresh_msg.empty:
-                            chat_message = fresh_msg
-                            fetch_time = time()
-                    except Exception as e:
-                        pass
-
+                LOGGER(__name__).info(f"Downloading media: {filename} (Size: {file_size_str})")
+                
                 if progress_msg and batch_stats:
                     batch_stats["processed"] += 1
                     try: await progress_msg.edit(get_progress_text(filename, file_size_str, batch_stats))
@@ -120,30 +110,14 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
                 elif not progress_msg:
                     progress_msg = await message.reply(get_progress_text(filename, file_size_str))
                 
-                max_retries = 3
-                retry_count = 1
-                
-                while retry_count <= max_retries:
-                    try:
-                        media_path = await chat_message.download(file_name=download_path)
-                        break
-                    except FloodWait as e:
-                        wait_s = int(getattr(e, "value", 0) or 0)
-                        await asyncio.sleep(wait_s + 1)
-                        continue 
-                    except FileReferenceExpired:
-                        try:
-                            chat_id, msg_id = getChatMsgID(post_url)
-                            chat_message = await user.get_messages(chat_id=chat_id, message_ids=msg_id)
-                        except Exception: pass
-                        retry_count += 1
-                        continue
-                    except Exception:
-                        if retry_count < max_retries:
-                             await asyncio.sleep(2)
-                             retry_count += 1
-                             continue
-                        break
+                try:
+                    media_path = await chat_message.download(file_name=download_path)
+                except FloodWait as e:
+                    wait_s = int(getattr(e, "value", 0) or 0)
+                    await asyncio.sleep(wait_s + 1)
+                    media_path = await chat_message.download(file_name=download_path)
+                except FileReferenceExpired:
+                    raise
 
             if not media_path or not os.path.exists(media_path): return
             if os.path.getsize(media_path) == 0: return
@@ -152,7 +126,7 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
             
             async with up_sem:
                 upload_success = await send_media(
-                    bot, message, media_path, media_type, parsed_caption, progress_msg, batch_stats, target_chat_id, reply_markup=safe_keyboard, message_id=message_id
+                    bot, message, media_path, media_type, parsed_caption, progress_msg, batch_stats, target_chat_id, target_topic_id, reply_markup=safe_keyboard, message_id=message_id
                 )
 
             if upload_success:
@@ -170,7 +144,7 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
             if caption_rules:
                 parsed_text = apply_caption_rules(parsed_text, caption_rules)
             
-            await bot.send_message(chat_id=target_chat_id, text=parsed_text, reply_markup=safe_keyboard, disable_web_page_preview=True)
+            await bot.send_message(chat_id=target_chat_id, message_thread_id=target_topic_id, text=parsed_text, reply_markup=safe_keyboard, disable_web_page_preview=True)
             LOGGER(__name__).info(f"Finished Processing: {post_url}")
             
     except (PeerIdInvalid, BadRequest, KeyError):
@@ -178,6 +152,8 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
     except FloodWait as e:
         wait_s = int(getattr(e, "value", 0) or 0)
         if wait_s > 0: await asyncio.sleep(wait_s + 1)
+    except FileReferenceExpired:
+        raise
     except Exception as e:
         if not batch_stats: await message.reply(f"**❌ {str(e)}**")
     finally:
@@ -187,8 +163,10 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
 
 async def execute_batch(bot: Client, user: Client, original_msg: Message, job: dict):
     start_chat, target_chat = job["start_chat"], job["target_chat"]
+    target_topic = job.get("target_topic")
     start_id, end_id = job["start_id"], job["end_id"]
-    filter_type, prefix = job.get("filter_type", "all"), job.get("prefix", "")
+    filters_selected = job.get("filter_type", ["all"])
+    prefix = job.get("prefix", "")
     caption_rules = job.get("caption_rules", [])
 
     try: await user.get_chat(start_chat)
@@ -200,24 +178,27 @@ async def execute_batch(bot: Client, user: Client, original_msg: Message, job: d
     except Exception: pass
 
     downloaded = skipped = failed = 0
-    batch_tasks = []
     processed_media_groups = set()
     
-    all_ids = list(range(start_id, end_id + 1))
-    batch_stats = {"total": len(all_ids), "processed": 0}
+    batch_stats = {"total": (end_id - start_id) + 1, "processed": 0}
     rapid_file_count, rapid_window_start = 0, time()
 
-    for i in range(0, len(all_ids), 100):
-        chunk_ids = all_ids[i:i + 100]
+    current_id = start_id
+    
+    while current_id <= end_id:
+        chunk_end = min(current_id + 199, end_id)
+        chunk_ids = list(range(current_id, chunk_end + 1))
+        
         try:
-            chunk_fetch_time = time()
             messages = await user.get_messages(chat_id=start_chat, message_ids=chunk_ids)
             if not isinstance(messages, list): messages = [messages]
         except Exception:
             failed += len(chunk_ids)
             batch_stats["processed"] += len(chunk_ids)
+            current_id = chunk_end + 1
             continue
             
+        batch_tasks = []
         for chat_msg in messages:
             if not chat_msg or chat_msg.empty:
                 skipped += 1
@@ -236,47 +217,56 @@ async def execute_batch(bot: Client, user: Client, original_msg: Message, job: d
                 batch_stats["processed"] += 1
                 continue
                 
-            if filter_type != "all":
-                if (filter_type == "video" and not chat_msg.video) or \
-                   (filter_type == "doc" and not chat_msg.document) or \
-                   (filter_type == "audio" and not chat_msg.audio) or \
-                   (filter_type == "photo" and not chat_msg.photo):
+            if "all" not in filters_selected:
+                if not any([
+                    ("video" in filters_selected and chat_msg.video),
+                    ("doc" in filters_selected and chat_msg.document),
+                    ("audio" in filters_selected and chat_msg.audio),
+                    ("photo" in filters_selected and chat_msg.photo)
+                ]):
                     skipped += 1
                     batch_stats["processed"] += 1
                     continue
 
             url = f"{prefix}/{chat_msg.id}"
-            task = track_task(handle_download(bot, user, original_msg, url, chat_msg, chunk_fetch_time, loading, batch_stats, target_chat, caption_rules))
-            batch_tasks.append(task)
+            task = track_task(handle_download(bot, user, original_msg, url, chat_msg, loading, batch_stats, target_chat, target_topic, caption_rules))
+            batch_tasks.append((chat_msg.id, task))
             
-            if len(batch_tasks) >= PyroConf.BATCH_SIZE:
-                results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-                for result in results:
-                    if isinstance(result, asyncio.CancelledError):
-                        try: await loading.unpin()
-                        except Exception: pass
-                        await loading.delete()
-                        return await original_msg.reply(f"**❌ Batch canceled** after downloading `{downloaded}` posts.")
-                    elif isinstance(result, Exception): failed += 1
-                    else: downloaded += 1; rapid_file_count += 1
+        if batch_tasks:
+            pending = [t for _, t in batch_tasks]
+            results = await asyncio.gather(*pending, return_exceptions=True)
+            
+            ref_expired_id = None
+            for i, result in enumerate(results):
+                msg_id = batch_tasks[i][0]
+                if isinstance(result, FileReferenceExpired) or (isinstance(result, Exception) and "FileReferenceExpired" in str(result)):
+                    if ref_expired_id is None or msg_id < ref_expired_id:
+                        ref_expired_id = msg_id
+                elif isinstance(result, asyncio.CancelledError):
+                    try: await loading.unpin()
+                    except Exception: pass
+                    await loading.delete()
+                    return await original_msg.reply(f"**❌ Batch canceled** after downloading `{downloaded}` posts.")
+                elif isinstance(result, Exception): failed += 1
+                else: downloaded += 1; rapid_file_count += 1
 
-                if rapid_file_count >= PyroConf.RAPID_LIMIT:
-                    elapsed = time() - rapid_window_start
-                    if elapsed < PyroConf.RAPID_WINDOW_DURATION:
-                        sleep_duration = PyroConf.RAPID_WINDOW_DURATION - elapsed
-                        try: await loading.edit(f"📥 **Batch Processing...**\n> 🕘 Pausing for {int(sleep_duration)}s to avoid floodwait.")
-                        except Exception: pass
-                        await asyncio.sleep(sleep_duration)
-                    rapid_file_count, rapid_window_start = 0, time()
+            if ref_expired_id is not None:
+                current_id = ref_expired_id
+                LOGGER(__name__).info(f"File reference expired at ID {current_id}. Refreshing chunk dynamically.")
+                await asyncio.sleep(2)
+                continue
 
-                batch_tasks.clear()
-                await asyncio.sleep(PyroConf.FLOOD_WAIT_DELAY)
+            if rapid_file_count >= PyroConf.RAPID_LIMIT:
+                elapsed = time() - rapid_window_start
+                if elapsed < PyroConf.RAPID_WINDOW_DURATION:
+                    sleep_duration = PyroConf.RAPID_WINDOW_DURATION - elapsed
+                    try: await loading.edit(f"📥 **Batch Processing...**\n> 🕘 Pausing for {int(sleep_duration)}s to avoid floodwait.")
+                    except Exception: pass
+                    await asyncio.sleep(sleep_duration)
+                rapid_file_count, rapid_window_start = 0, time()
 
-    if batch_tasks:
-        results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-        for result in results:
-            if isinstance(result, Exception): failed += 1
-            else: downloaded += 1
+        await asyncio.sleep(PyroConf.FLOOD_WAIT_DELAY)
+        current_id = chunk_end + 1
 
     try: await loading.unpin()
     except Exception: pass
@@ -293,13 +283,14 @@ async def execute_batch(bot: Client, user: Client, original_msg: Message, job: d
 
 async def execute_autoforward(bot: Client, user: Client, original_msg: Message, job: dict):
     start_chat, target_chat = job["start_chat"], job["target_chat"]
+    target_topic = job.get("target_topic")
     start_id, end_id = job["start_id"], job["end_id"]
     caption_rules = job.get("caption_rules", [])
     
     try:
         chat_info = await user.get_chat(start_chat)
         if getattr(chat_info, "has_protected_content", False):
-            return await original_msg.reply("❌ **Source chat is restricted!**\n`/autoforward` only works for unrestricted chats. Please use `/batch` instead.")
+            return await original_msg.reply("❌ **Source chat is restricted!**\n`/autoforward` only works for unrestricted chats. Please use batch processing instead.")
     except Exception: pass 
     
     loading = await original_msg.reply(f"📥 **Started Auto-Forwarding...**")
@@ -307,8 +298,8 @@ async def execute_autoforward(bot: Client, user: Client, original_msg: Message, 
     copied = skipped = failed = 0
     all_ids = list(range(start_id, end_id + 1))
     
-    for i in range(0, len(all_ids), 100):
-        chunk_ids = all_ids[i:i + 100]
+    for i in range(0, len(all_ids), 200):
+        chunk_ids = all_ids[i:i + 200]
         try:
             messages = await user.get_messages(chat_id=start_chat, message_ids=chunk_ids)
             if not isinstance(messages, list): messages = [messages]
@@ -332,7 +323,13 @@ async def execute_autoforward(bot: Client, user: Client, original_msg: Message, 
                 else:
                     custom_caption = ""
                 
-                kwargs = {"chat_id": target_chat, "from_chat_id": start_chat, "message_id": chat_msg.id}
+                kwargs = {
+                    "chat_id": target_chat, 
+                    "from_chat_id": start_chat, 
+                    "message_id": chat_msg.id,
+                    "message_thread_id": target_topic
+                }
+                
                 if custom_caption: 
                     kwargs["caption"] = custom_caption
                     kwargs["parse_mode"] = ParseMode.MARKDOWN

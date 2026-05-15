@@ -11,7 +11,7 @@ from pyrogram.types import (
     InputMediaAudio,
 )
 
-from pyrogram.errors import FloodWait, Timeout
+from pyrogram.errors import FloodWait, Timeout, FileReferenceExpired
 
 from helpers.files import (
     fileSizeLimit,
@@ -331,6 +331,8 @@ async def download_single_media(msg, user_client, semaphore, progress_msg=None, 
                     pass
             await asyncio.sleep(wait_s + 1)
             continue
+        except FileReferenceExpired:
+            raise
         except Exception as e:
             LOGGER(__name__).info(f"Error downloading: {e} (Attempt {retry_count})")
             if retry_count < max_retries:

@@ -141,21 +141,27 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
             
             parsed_text = await get_parsed_msg(chat_message.text or "", chat_message.entities)
             parsed_text = clean_caption(parsed_text)
-            if caption_rules:
-                parsed_text = apply_caption_rules(parsed_text, caption_rules)
             
-            await bot.send_message(chat_id=target_chat_id, message_thread_id=target_topic_id, text=parsed_text, reply_markup=safe_keyboard, disable_web_page_preview=True)
+            try:
+                await bot.send_message(chat_id=target_chat_id, message_thread_id=target_topic_id, text=parsed_text, reply_markup=safe_keyboard, disable_web_page_preview=True)
+            except BadRequest:
+                await bot.send_message(chat_id=target_chat_id, message_thread_id=target_topic_id, text=chat_message.text or "", reply_markup=safe_keyboard, disable_web_page_preview=True)
+            
             LOGGER(__name__).info(f"Finished Processing: {post_url}")
             
-    except (PeerIdInvalid, BadRequest, KeyError):
-        if not batch_stats: await message.reply("**Make sure the user client is part of the chat.**")
+    except FileReferenceExpired:
+        raise
+    except (PeerIdInvalid, BadRequest, KeyError) as e:
+        if batch_stats:
+            raise e
+        await message.reply("**Make sure the user client is part of the chat.**")
     except FloodWait as e:
         wait_s = int(getattr(e, "value", 0) or 0)
         if wait_s > 0: await asyncio.sleep(wait_s + 1)
-    except FileReferenceExpired:
-        raise
     except Exception as e:
-        if not batch_stats: await message.reply(f"**❌ {str(e)}**")
+        if batch_stats:
+            raise e
+        await message.reply(f"**❌ {str(e)}**")
     finally:
         if media_path: cleanup_download(media_path)
         elapsed = time() - task_start_time
@@ -240,7 +246,13 @@ async def execute_batch(bot: Client, user: Client, original_msg: Message, job: d
                 try: await loading.unpin()
                 except Exception: pass
                 await loading.delete()
-                return await original_msg.reply(f"**❌ Batch canceled** after downloading `{downloaded}` posts.")
+                return await original_msg.reply(
+                    "> 🛑 **Batch Process Canceled!**\n"
+                    "━━━━━━━━━━━━━━━━━━━\n"
+                    f"📥 **Downloaded** : {downloaded} post(s)\n"
+                    f"⏭️ **Skipped** : {skipped} (filtered)\n"
+                    f"❌ **Failed** : {failed} error(s)"
+                )
             except FileReferenceExpired:
                 ref_expired = True
                 current_id = chat_msg.id

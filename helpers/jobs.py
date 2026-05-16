@@ -120,7 +120,14 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
                     raise
 
             if not media_path or not os.path.exists(media_path): return
-            if os.path.getsize(media_path) == 0: return
+            
+            actual_size = os.path.getsize(media_path)
+            
+            if pre_file_size > 0 and actual_size < pre_file_size:
+                LOGGER(__name__).warning(f"File size mismatch. The file reference might have expired.")
+                raise FileReferenceExpired()
+            elif actual_size == 0:
+                return
             
             media_type = "photo" if chat_message.photo else "video" if chat_message.video else "audio" if chat_message.audio else "document"
             
@@ -146,7 +153,7 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
                 await bot.send_message(chat_id=target_chat_id, message_thread_id=target_topic_id, text=parsed_text, reply_markup=safe_keyboard, disable_web_page_preview=True)
             except BadRequest:
                 await bot.send_message(chat_id=target_chat_id, message_thread_id=target_topic_id, text=chat_message.text or "", reply_markup=safe_keyboard, disable_web_page_preview=True)
-            
+                
             LOGGER(__name__).info(f"Finished Processing: {post_url}")
             
     except FileReferenceExpired:
@@ -247,7 +254,7 @@ async def execute_batch(bot: Client, user: Client, original_msg: Message, job: d
                 except Exception: pass
                 await loading.delete()
                 return await original_msg.reply(
-                    "> 🛑 **Batch Process Canceled!**\n"
+                    "> ❗ **Batch Process Canceled!**\n"
                     "━━━━━━━━━━━━━━━━━━━\n"
                     f"📥 **Downloaded** : {downloaded} post(s)\n"
                     f"⏭️ **Skipped** : {skipped} (filtered)\n"
@@ -306,7 +313,7 @@ async def execute_autoforward(bot: Client, user: Client, original_msg: Message, 
     try:
         chat_info = await user.get_chat(start_chat)
         if getattr(chat_info, "has_protected_content", False):
-            return await original_msg.reply("❌ **Source chat is restricted!**\n`/autoforward` only works for unrestricted chats. Please use batch processing instead.")
+            return await original_msg.reply("❌ **Source chat is restricted!**\n`/autoforward` only works for unrestricted chats. Please use `/batch` instead.")
     except Exception: pass 
     
     loading = await original_msg.reply(f"📥 **Started Auto-Forwarding...**")

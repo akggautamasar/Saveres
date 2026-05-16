@@ -299,6 +299,15 @@ async def download_single_media(msg, user_client, semaphore, progress_msg=None, 
                     file_name=download_path
                 )
 
+            media_obj = msg.document or msg.video or msg.audio or msg.photo or msg.animation or msg.voice or msg.video_note or msg.sticker
+            pre_file_size = getattr(media_obj, "file_size", 0) if media_obj else 0
+            
+            if media_path and os.path.exists(media_path):
+                actual_size = os.path.getsize(media_path)
+                if pre_file_size > 0 and actual_size < pre_file_size:
+                    LOGGER(__name__).warning(f"Group File size mismatch. The file reference might have expired.")
+                    raise FileReferenceExpired()
+
             parsed_caption = await get_parsed_msg(
                 msg.caption or "", msg.caption_entities
             )

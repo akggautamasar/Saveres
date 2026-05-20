@@ -194,7 +194,6 @@ async def execute_batch(bot: Client, user: Client, original_msg: Message, job: d
     processed_media_groups = set()
     
     batch_stats = {"total": (end_id - start_id) + 1, "processed": 0}
-    rapid_file_count, rapid_window_start = 0, time()
 
     current_id = start_id
     
@@ -248,7 +247,6 @@ async def execute_batch(bot: Client, user: Client, original_msg: Message, job: d
             try:
                 await task
                 downloaded += 1
-                rapid_file_count += 1
             except asyncio.CancelledError:
                 try: await loading.unpin()
                 except Exception: pass
@@ -274,15 +272,6 @@ async def execute_batch(bot: Client, user: Client, original_msg: Message, job: d
                     await asyncio.sleep(2)
                     break
                 failed += 1
-
-            if rapid_file_count >= PyroConf.RAPID_LIMIT:
-                elapsed = time() - rapid_window_start
-                if elapsed < PyroConf.RAPID_WINDOW_DURATION:
-                    sleep_duration = PyroConf.RAPID_WINDOW_DURATION - elapsed
-                    try: await loading.edit(f"📥 **Batch Processing...**\n> 🕘 Pausing for {int(sleep_duration)}s to avoid floodwait.")
-                    except Exception: pass
-                    await asyncio.sleep(sleep_duration)
-                rapid_file_count, rapid_window_start = 0, time()
 
             await asyncio.sleep(PyroConf.FLOOD_WAIT_DELAY)
 

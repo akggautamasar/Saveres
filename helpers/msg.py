@@ -44,14 +44,26 @@ def apply_caption_rules(caption: str, rules: list) -> str:
             
         lines = caption.split('\n')
         
-        if rule == "remove_1" and len(lines) > 0:
-            caption = '\n'.join(lines[:-1]).strip()
-        elif rule == "remove_2" and len(lines) > 1:
-            caption = '\n'.join(lines[:-2]).strip()
+        if rule == "rm_last":
+            target_idx = -1
+            for i in range(len(lines) - 1, -1, -1):
+                if re.search(r'[a-zA-Z0-9]', lines[i]):
+                    target_idx = i
+                    break
+            
+            if target_idx != -1:
+                caption = '\n'.join(lines[:target_idx]).strip()
+            else:
+                caption = ""
+
         elif rule.startswith("remove_text:"):
             text_to_remove = rule.split("remove_text:", 1)[1]
-            
+
             caption = caption.replace(text_to_remove, "")
+            if text_to_remove.startswith("@"):
+                alt_text = text_to_remove.replace("@", "(at)", 1)
+                caption = caption.replace(alt_text, "")
+
             caption = re.sub(r'[ \t]{2,}', ' ', caption)
             caption = re.sub(r' \.', '.', caption)
             caption = re.sub(r'\n[ \t]+\n', '\n\n', caption)

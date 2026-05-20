@@ -12,7 +12,7 @@ from config import PyroConf
 from logger import LOGGER
 
 from helpers.files import get_readable_file_size, get_readable_time
-from helpers.msg import getChatMsgID, get_parsed_msg
+from helpers.msg import getChatMsgID, get_parsed_msg, apply_caption_rules
 from helpers.jobs import execute_batch, execute_autoforward, handle_download, track_task, get_running_tasks
 from helpers.keyboards import get_start_keyboard, get_caption_keyboard, get_filter_keyboard
 
@@ -62,9 +62,13 @@ async def trigger_caption_setup(bot: Client, user: Client, message: Message, job
         WAITING_FOR_CAPTION_RULE[user_id] = job
         job["original_message_id"] = message.id 
         
+        preview_caption = apply_caption_rules(sample_caption, job["caption_rules"])
+        display_cap = preview_caption[:300] + ("..." if len(preview_caption) > 300 else "")
+        if not display_cap: display_cap = "[Caption is empty]"
+        
         text = (
-            f"**Current Caption:**\n\n`{sample_caption[:300]}...`\n\n"
-            "🔄 To clean up a caption reply to the message with the exact text you'd like to remove!\n\n"
+            f"**Caption Preview:**\n\n`{display_cap}`\n\n"
+            "🔄 To clean up a caption, reply to this message with the exact text you'd like to remove!\n\n"
             f"> 🎯 **Active Rules:** 0 applied"
         )
         
@@ -211,7 +215,7 @@ async def auto_forward_init(bot: Client, message: Message):
     WAITING_FOR_DEST[message.from_user.id] = {"action": "wait_auto_end"}
     await message.reply("🔗 Send the **ending post link** to establish the range.")
 
-@bot.on_callback_query(filters.regex(r"^cap_(rm1|rm2|done)_(\d+)$"))
+@bot.on_callback_query(filters.regex(r"^cap_(rmlast|done)_(\d+)$"))
 async def caption_rule_callback(bot: Client, callback_query: CallbackQuery):
     action, msg_id = callback_query.matches[0].groups()
     user_id = callback_query.from_user.id
@@ -230,19 +234,18 @@ async def caption_rule_callback(bot: Client, callback_query: CallbackQuery):
             await track_task(execute_autoforward(bot, user, job["original_message"], job))
         return
         
-    rule_map = {"rm1": "remove_1", "rm2": "remove_2"}
-    rule_to_add = rule_map[action]
-    
-    if rule_to_add in job["caption_rules"]:
-        return await callback_query.answer("⚠️ This rule is already applied!", show_alert=True)
-        
-    job["caption_rules"].append(rule_to_add)
-    await callback_query.answer("✅ Rule Added!", show_alert=False)
+    if action == "rmlast":
+        job["caption_rules"].append("rm_last")
+        await callback_query.answer("✅ Rule Added!", show_alert=False)
     
     rules_count = len(job["caption_rules"])
+    preview_caption = apply_caption_rules(job['sample_caption'], job["caption_rules"])
+    display_cap = preview_caption[:300] + ("..." if len(preview_caption) > 300 else "")
+    if not display_cap: display_cap = "[Caption is empty]"
+    
     text = (
-        f"**Current Caption:**\n\n`{job['sample_caption'][:300]}...`\n\n"
-        "🔄 To clean up a caption reply to the message with the exact text you'd like to remove!\n\n"
+        f"**Caption Preview:**\n\n`{display_cap}`\n\n"
+        "🔄 To clean up a caption, reply to this message with the exact text you'd like to remove!\n\n"
         f"> 🎯 **Active Rules:** {rules_count} applied"
     )
     
@@ -314,11 +317,16 @@ async def handle_any_message(bot: Client, message: Message):
         job["caption_rules"].append(new_rule)
 
         rules_count = len(job["caption_rules"])
+        preview_caption = apply_caption_rules(job['sample_caption'], job["caption_rules"])
+        display_cap = preview_caption[:300] + ("..." if len(preview_caption) > 300 else "")
+        if not display_cap: display_cap = "[Caption is empty]"
+        
         text = (
-            f"**Current Caption:**\n\n`{job['sample_caption'][:300]}...`\n\n"
-            "🔄 To clean up a caption reply to the message with the exact text you'd like to remove!\n\n"
+            f"**Caption Preview:**\n\n`{display_cap}`\n\n"
+            "🔄 To clean up a caption, reply to this message with the exact text you'd like to remove!\n\n"
             f"> 🎯 **Active Rules:** {rules_count} applied"
         )
+        
         try:
             await bot.edit_message_text(
                 chat_id=message.chat.id, 

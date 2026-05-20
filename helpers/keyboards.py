@@ -9,9 +9,8 @@ def get_start_keyboard():
 
 def get_caption_keyboard(message_id):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Trim Last Line", callback_data=f"cap_rm1_{message_id}"),
-         InlineKeyboardButton("Trim Last 2 Lines", callback_data=f"cap_rm2_{message_id}")],
-        [InlineKeyboardButton("✅ Start", callback_data=f"cap_done_{message_id}")]
+        [InlineKeyboardButton("✂️ Trim Last Line", callback_data=f"cap_rmlast_{message_id}"),
+         InlineKeyboardButton("✅ Start", callback_data=f"cap_done_{message_id}")]
     ])
 
 def get_filter_keyboard(selected_filters, message_id):

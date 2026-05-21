@@ -10,5 +10,6 @@ class PyroConf(object):
     BOT_START_TIME = time()
     MAX_CONCURRENT_DOWNLOADS = int(getenv("MAX_CONCURRENT_DOWNLOADS", "1"))
     MAX_CONCURRENT_UPLOADS = int(getenv("MAX_CONCURRENT_UPLOADS", "1"))
+    MAX_CONCURRENT_TRANSMISSIONS = int(getenv("MAX_CONCURRENT_TRANSMISSIONS", "5"))
     BATCH_SIZE = int(getenv("BATCH_SIZE", "1"))
     FLOOD_WAIT_DELAY = int(getenv("FLOOD_WAIT_DELAY", "5"))

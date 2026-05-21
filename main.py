@@ -23,7 +23,7 @@ bot = Client(
     bot_token=PyroConf.BOT_TOKEN,
     workers=100,
     parse_mode=ParseMode.MARKDOWN,
-    max_concurrent_transmissions=PyroConf.MAX_CONCURRENT_UPLOADS, 
+    max_concurrent_transmissions=PyroConf.MAX_CONCURRENT_TRANSMISSIONS, 
     sleep_threshold=60,
 )
 
@@ -31,7 +31,7 @@ user = Client(
     "user_session",
     workers=100,
     session_string=PyroConf.SESSION_STRING,
-    max_concurrent_transmissions=PyroConf.MAX_CONCURRENT_DOWNLOADS,
+    max_concurrent_transmissions=PyroConf.MAX_CONCURRENT_TRANSMISSIONS,
     sleep_threshold=60,
 )
 
@@ -41,7 +41,7 @@ WAITING_FOR_CAPTION_RULE = {}
 LINK_CACHE = {} 
 FILTER_STATE = {}
 
-async def trigger_caption_setup(bot: Client, user: Client, message: Message, job: dict):
+async def trigger_caption_setup(bot: Client, user: Client, message: Message, job: dict, requester_id: int = None):
     sample_caption = ""
     for msg_id in range(job["start_id"], min(job["start_id"] + 5, job["end_id"] + 1)):
         try:
@@ -57,7 +57,7 @@ async def trigger_caption_setup(bot: Client, user: Client, message: Message, job
     job["caption_rules"] = []
     
     if sample_caption:
-        user_id = message.from_user.id if hasattr(message, "from_user") and message.from_user else message.chat.id
+        user_id = requester_id or (message.from_user.id if hasattr(message, "from_user") and message.from_user else message.chat.id)
         job["sample_caption"] = sample_caption 
         WAITING_FOR_CAPTION_RULE[user_id] = job
         job["original_message_id"] = message.id 
@@ -201,7 +201,7 @@ async def batch_destination_callback(bot: Client, callback_query: CallbackQuery)
     if action == "bot":
         job["target_chat"] = callback_query.message.chat.id
         job["target_topic"] = None
-        await trigger_caption_setup(bot, user, callback_query.message, job)
+        await trigger_caption_setup(bot, user, callback_query.message, job, requester_id=callback_query.from_user.id)
     elif action == "chan":
         WAITING_FOR_DEST[callback_query.from_user.id] = job
         await job["original_message"].reply("🔗 Send a post link from the target channel or topic.")

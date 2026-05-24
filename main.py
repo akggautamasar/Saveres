@@ -169,7 +169,7 @@ async def filter_menu_callback(bot: Client, callback_query: CallbackQuery):
         
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("Bot Chat", callback_data=f"batch_bot_{msg_id}"),
-             InlineKeyboardButton("Channel / Topic", callback_data=f"batch_chan_{msg_id}")]
+             InlineKeyboardButton("Channel/Topic", callback_data=f"batch_chan_{msg_id}")]
         ])
         return await callback_query.message.edit_text("Where do you want to forward the media?", reply_markup=keyboard)
         

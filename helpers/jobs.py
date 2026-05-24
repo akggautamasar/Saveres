@@ -56,7 +56,7 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
             chat_message = await user.get_messages(chat_id=chat_id, message_ids=message_id)
 
         if not chat_message or chat_message.empty:
-             if not batch_stats: await message.reply("**❌ Message not found or inaccessible.**")
+             if not batch_stats: await message.reply("❌ <b>Message not found or inaccessible.</b>")
              return
 
         if chat_message.document or chat_message.video or chat_message.audio:
@@ -83,7 +83,7 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
             if not await processMediaGroup(chat_message, user, bot, message, dl_sem, progress_msg, batch_stats, target_chat_id, target_topic_id, caption_rules):
                 if progress_msg:
                     try:
-                        await progress_msg.edit("❌ **Failed to process Media Group**")
+                        await progress_msg.edit("❌ <b>Failed to process Media Group</b>")
                         await asyncio.sleep(2)
                     except Exception: pass
             
@@ -161,7 +161,7 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
     except (PeerIdInvalid, BadRequest, KeyError) as e:
         if batch_stats:
             raise e
-        await message.reply("**Make sure the user client is part of the chat.**")
+        await message.reply("<b>Make sure the user client is part of the chat.</b>")
     except FloodWait as e:
         wait_s = int(getattr(e, "value", 0) or 0)
         if wait_s > 0: await asyncio.sleep(wait_s + 1)
@@ -185,7 +185,7 @@ async def execute_batch(bot: Client, user: Client, original_msg: Message, job: d
     try: await user.get_chat(start_chat)
     except Exception: pass
 
-    loading = await original_msg.reply(f"📥 **Started Batch Processing...**")
+    loading = await original_msg.reply(f"📥 <b>Started Batch Processing...</b>")
     LOGGER(__name__).info(f"Batch Process Started | Range: {start_id} to {end_id}")
     try: await loading.pin(disable_notification=True, both_sides=True)
     except Exception: pass
@@ -252,11 +252,12 @@ async def execute_batch(bot: Client, user: Client, original_msg: Message, job: d
                 except Exception: pass
                 await loading.delete()
                 return await original_msg.reply(
-                    "> ❗ **Batch Process Canceled!**\n"
+                    "<blockquote>❗<b>Batch Process Canceled!</b>\n"
                     "━━━━━━━━━━━━━━━━━━━\n"
-                    f"📥 **Downloaded** : {downloaded} post(s)\n"
-                    f"⏭️ **Skipped** : {skipped} (filtered)\n"
-                    f"❌ **Failed** : {failed} error(s)"
+                    f"📥 <b>Downloaded</b>: {downloaded} post(s)\n"
+                    f"⏭️ <b>Skipped</b>: {skipped} (filtered)\n"
+                    f"❌ <b>Failed</b>: {failed} error(s)</blockquote>",
+                    parse_mode=ParseMode.HTML
                 )
             except FileReferenceExpired:
                 ref_expired = True
@@ -286,11 +287,12 @@ async def execute_batch(bot: Client, user: Client, original_msg: Message, job: d
     LOGGER(__name__).info(f"Batch Process Completed | Total: {downloaded} | Skipped: {skipped} | Failed: {failed}")
     
     await original_msg.reply(
-        "> ✅ **Batch Process Completed!**\n"
+        "<blockquote>✅ <b>Batch Process Completed!</b>\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        f"📥 **Total** : {downloaded} post(s)\n"
-        f"⏭️ **Skipped** : {skipped} (filtered)\n"
-        f"❌ **Failed** : {failed} error(s)"
+        f"📥 <b>Total</b>: {downloaded} post(s)\n"
+        f"⏭️ <b>Skipped</b>: {skipped} (filtered)\n"
+        f"❌ <b>Failed</b>: {failed} error(s)</blockquote>",
+        parse_mode=ParseMode.HTML
     )
 
 async def execute_autoforward(bot: Client, user: Client, original_msg: Message, job: dict):
@@ -302,10 +304,10 @@ async def execute_autoforward(bot: Client, user: Client, original_msg: Message, 
     try:
         chat_info = await user.get_chat(start_chat)
         if getattr(chat_info, "has_protected_content", False):
-            return await original_msg.reply("❌ **Source chat is restricted!**\n`/autoforward` only works for unrestricted chats. Please use `/batch` instead.")
+            return await original_msg.reply("❌ <b>Source chat is restricted!</b>\n`/autoforward` only works for unrestricted chats. Please use `/batch` instead.")
     except Exception: pass 
     
-    loading = await original_msg.reply(f"📥 **Started Auto-Forwarding...**")
+    loading = await original_msg.reply(f"📥 <b>Started Auto-Forwarding...</b>")
     LOGGER(__name__).info(f"Auto-Forward Process Started | Range: {start_id} to {end_id}")
     copied = skipped = failed = 0
     all_ids = list(range(start_id, end_id + 1))
@@ -361,9 +363,10 @@ async def execute_autoforward(bot: Client, user: Client, original_msg: Message, 
     await loading.delete()
     LOGGER(__name__).info(f"Auto-Forward Completed | Total: {copied} | Skipped: {skipped} | Failed: {failed}")
     await original_msg.reply(
-        "> ✅ **Auto-Forward Completed!**\n"
+        "<blockquote> ✅ <b>Auto-Forward Completed!</b>\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        f"📥 **Total** : {copied} post(s)\n"
-        f"⏭️ **Skipped** : {skipped}\n"
-        f"❌ **Failed** : {failed}"
+        f"📥 <b>Total</b>: {copied} post(s)\n"
+        f"⏭️ <b>Skipped</b>: {skipped}\n"
+        f"❌ <b>Failed</b>: {failed}</blockquote>",
+        parse_mode=ParseMode.HTML
     )

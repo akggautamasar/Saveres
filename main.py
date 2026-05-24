@@ -22,7 +22,7 @@ bot = Client(
     api_hash=PyroConf.API_HASH,
     bot_token=PyroConf.BOT_TOKEN,
     workers=100,
-    parse_mode=ParseMode.MARKDOWN,
+    parse_mode=ParseMode.HTML,
     max_concurrent_transmissions=PyroConf.MAX_CONCURRENT_TRANSMISSIONS, 
     sleep_threshold=60,
 )
@@ -49,7 +49,7 @@ async def trigger_caption_setup(bot: Client, user: Client, message: Message, job
             if msg_obj and not getattr(msg_obj, "empty", True):
                 raw_text = msg_obj.caption or msg_obj.text
                 if raw_text and len(raw_text.strip()) > 50 and '\n' in raw_text:
-                    sample_caption = await get_parsed_msg(raw_text, msg_obj.caption_entities or msg_obj.entities)
+                    sample_caption = await get_parsed_msg(msg_obj)
                     break
         except Exception:
             continue
@@ -67,12 +67,12 @@ async def trigger_caption_setup(bot: Client, user: Client, message: Message, job
         if not display_cap: display_cap = "[Caption is empty]"
         
         text = (
-            f"**Caption Preview:**\n\n`{display_cap}`\n\n"
+            f"<b>Caption Preview:</b>\n\n<code>{display_cap}</code>\n\n"
             "🔄 To clean up a caption, reply to this message with the exact text you'd like to remove!\n\n"
-            f"> 🎯 **Active Rules:** 0 applied"
+            f"<blockquote>🎯 <b>Active Rules:</b> 0 applied</blockquote>"
         )
         
-        msg = await message.reply(text, reply_markup=get_caption_keyboard(message.id))
+        msg = await message.reply(text, reply_markup=get_caption_keyboard(message.id), parse_mode=ParseMode.HTML)
         job["menu_message_id"] = msg.id
     else:
         job["caption_rules"] = ["keep"]
@@ -84,40 +84,40 @@ async def trigger_caption_setup(bot: Client, user: Client, message: Message, job
 @bot.on_message(filters.command("start") & filters.private)
 async def start(_, message: Message):
     welcome_text = (
-        "🤖 **Welcome to Save Restricted Bot!**\n\n"
+        "🤖 <b>Welcome to Save Restricted Bot!</b>\n\n"
         "I can help you download media from restricted channels and set up auto-forwarding. 🚀\n\n"
-        "⚙️ **How to use:**\n"
+        "⚙️ <b>How to use:</b>\n"
         "• Just paste any Telegram post link directly in this chat to get started.\n"
-        "• Use `/help` to see advanced commands.\n\n"
+        "• Use <code>/help</code> to see advanced commands.\n\n"
         "⚠️ Make sure your user client is already a member of the target chat."
     )
-    await message.reply(welcome_text, disable_web_page_preview=True)
+    await message.reply(welcome_text, disable_web_page_preview=True, parse_mode=ParseMode.HTML)
 
 @bot.on_message(filters.command("help") & filters.private)
 async def help_command(_, message: Message):
     help_text = (
-        "💡 **Bot Commands**\n\n"
-        "📥 **Single Posts**\n"
+        "💡 <b>Bot Commands</b>\n\n"
+        "📥 <b>Single Posts</b>\n"
         "• Paste any restricted post link directly in the chat.\n\n"
-        "📦 **Batch Downloads**\n"
-        "• Type `/batch <start_url>` to initiate a batch download manually.\n\n"
-        "⚡ **Auto-Forwarding**\n"
-        "`/autoforward <from_chat_link> <to_chat_link>`\n\n"
-        "⚙️ **System Controls**\n"
-        "• `/stop` - Cancel active tasks\n"
-        "• `/stats` - Check bot performance\n"
-        "• `/logs` - View system logs\n\n"
-        "🔒 **Requirement:** Your user client session must be a member of the source chat."
+        "📦 <b>Batch Downloads</b>\n"
+        "• Type <code>/batch &lt;start_url&gt;</code> to initiate a batch download manually.\n\n"
+        "⚡ <b>Auto-Forwarding</b>\n"
+        "<code>/autoforward &lt;from_chat_link&gt; &lt;to_chat_link&gt;</code>\n\n"
+        "⚙️ <b>System Controls</b>\n"
+        "• <code>/stop</code> - Cancel active tasks\n"
+        "• <code>/stats</code> - Check bot performance\n"
+        "• <code>/logs</code> - View system logs\n\n"
+        "🔒 <b>Requirement:</b> Your user client session must be a member of the source chat."
     )
-    await message.reply(help_text, disable_web_page_preview=True)
+    await message.reply(help_text, disable_web_page_preview=True, parse_mode=ParseMode.HTML)
 
 @bot.on_message(filters.command("batch") & filters.private)
 async def batch_command(bot: Client, message: Message):
     args = message.text.split()
     if len(args) < 2 or not args[1].startswith("https://t.me/"):
-        return await message.reply("🚀 **Batch Download**\n> `/batch start_link`")
+        return await message.reply("🚀 <b>Batch Download</b>\n<blockquote><code>/batch start_link</code></blockquote>", parse_mode=ParseMode.HTML)
     LINK_CACHE[message.from_user.id] = args[1]
-    await message.reply("🔗 Send the **ending post link** to establish the range.")
+    await message.reply("🔗 Send the <b>ending post link</b> to establish the range.", parse_mode=ParseMode.HTML)
     WAITING_FOR_DEST[message.from_user.id] = {"action": "wait_batch_end"}
 
 @bot.on_callback_query(filters.regex(r"^menu_(single|batch|auto)$"))
@@ -137,11 +137,11 @@ async def main_menu_callback(bot: Client, callback_query: CallbackQuery):
         
     elif action == "batch":
         WAITING_FOR_DEST[user_id] = {"action": "wait_batch_end"}
-        await callback_query.message.reply("🔗 Send the **ending post link** to establish the range.")
+        await callback_query.message.reply("🔗 Send the <b>ending post link</b> to establish the range.", parse_mode=ParseMode.HTML)
         
     elif action == "auto":
         WAITING_FOR_DEST[user_id] = {"action": "wait_auto_end"}
-        await callback_query.message.reply("🔗 Send the **ending post link** to establish the range.")
+        await callback_query.message.reply("🔗 Send the <b>ending post link</b> to establish the range.", parse_mode=ParseMode.HTML)
 
 @bot.on_callback_query(filters.regex(r"^filter_([a-z]+)_(\d+)$"))
 async def filter_menu_callback(bot: Client, callback_query: CallbackQuery):
@@ -210,10 +210,10 @@ async def batch_destination_callback(bot: Client, callback_query: CallbackQuery)
 async def auto_forward_init(bot: Client, message: Message):
     args = message.text.split()
     if len(args) < 2 or not args[1].startswith("https://t.me/"):
-        return await message.reply("🚀 **Auto-Forward**\n> `/autoforward <start_link>`")
+        return await message.reply("🚀 <b>Auto-Forward</b>\n<blockquote><code>/autoforward &lt;start_link&gt;</code></blockquote>", parse_mode=ParseMode.HTML)
     LINK_CACHE[message.from_user.id] = args[1]
     WAITING_FOR_DEST[message.from_user.id] = {"action": "wait_auto_end"}
-    await message.reply("🔗 Send the **ending post link** to establish the range.")
+    await message.reply("🔗 Send the <b>ending post link</b> to establish the range.", parse_mode=ParseMode.HTML)
 
 @bot.on_callback_query(filters.regex(r"^cap_(rmlast|done)_(\d+)$"))
 async def caption_rule_callback(bot: Client, callback_query: CallbackQuery):
@@ -244,13 +244,13 @@ async def caption_rule_callback(bot: Client, callback_query: CallbackQuery):
     if not display_cap: display_cap = "[Caption is empty]"
     
     text = (
-        f"**Caption Preview:**\n\n`{display_cap}`\n\n"
+        f"<b>Caption Preview:</b>\n\n<code>{display_cap}</code>\n\n"
         "🔄 To clean up a caption, reply to this message with the exact text you'd like to remove!\n\n"
-        f"> 🎯 **Active Rules:** {rules_count} applied"
+        f"<blockquote>🎯 <b>Active Rules:</b> {rules_count} applied</blockquote>"
     )
     
     try:
-        await callback_query.message.edit_text(text, reply_markup=get_caption_keyboard(job['original_message_id']))
+        await callback_query.message.edit_text(text, reply_markup=get_caption_keyboard(job['original_message_id']), parse_mode=ParseMode.HTML)
     except Exception: pass
 
 @bot.on_message(filters.private & filters.text & ~filters.command(["start", "help", "stats", "logs", "stop", "autoforward", "batch"]))
@@ -268,10 +268,10 @@ async def handle_any_message(bot: Client, message: Message):
                 start_chat, start_id, _ = getChatMsgID(start_link)
                 end_chat, end_id, _ = getChatMsgID(end_link)
             except Exception as e:
-                return await message.reply(f"**❌ Error parsing links:\n{e}**")
+                return await message.reply(f"<b>❌ Error parsing links:\n{e}</b>", parse_mode=ParseMode.HTML)
                 
-            if start_chat != end_chat: return await message.reply("**❌ Both links must be from the same channel.**")
-            if start_id > end_id: return await message.reply("**❌ Invalid range.**")
+            if start_chat != end_chat: return await message.reply("<b>❌ Both links must be from the same channel.</b>", parse_mode=ParseMode.HTML)
+            if start_id > end_id: return await message.reply("<b>❌ Invalid range.</b>", parse_mode=ParseMode.HTML)
             
             if job["action"] == "wait_batch_end":
                 BATCH_JOBS[message.id] = {
@@ -283,7 +283,7 @@ async def handle_any_message(bot: Client, message: Message):
                     "original_message": message
                 }
                 FILTER_STATE[message.id] = []
-                await message.reply("🎬 **Select media types to download:**", reply_markup=get_filter_keyboard([], message.id))
+                await message.reply("🎬 <b>Select media types to download:</b>", reply_markup=get_filter_keyboard([], message.id), parse_mode=ParseMode.HTML)
                 
             elif job["action"] == "wait_auto_end":
                 auto_job = {
@@ -303,7 +303,7 @@ async def handle_any_message(bot: Client, message: Message):
             job["target_topic"] = target_topic_id 
             await trigger_caption_setup(bot, user, message, job)
         except Exception as e:
-            await message.reply(f"**❌ Error parsing target link:\n{e}**")
+            await message.reply(f"<b>❌ Error parsing target link:\n{e}</b>", parse_mode=ParseMode.HTML)
         return
     
     if user_id in WAITING_FOR_CAPTION_RULE:
@@ -322,9 +322,9 @@ async def handle_any_message(bot: Client, message: Message):
         if not display_cap: display_cap = "[Caption is empty]"
         
         text = (
-            f"**Caption Preview:**\n\n`{display_cap}`\n\n"
+            f"<b>Caption Preview:</b>\n\n<code>{display_cap}</code>\n\n"
             "🔄 To clean up a caption, reply to this message with the exact text you'd like to remove!\n\n"
-            f"> 🎯 **Active Rules:** {rules_count} applied"
+            f"<blockquote>🎯 <b>Active Rules:</b> {rules_count} applied</blockquote>"
         )
         
         try:
@@ -332,16 +332,17 @@ async def handle_any_message(bot: Client, message: Message):
                 chat_id=message.chat.id, 
                 message_id=job["menu_message_id"], 
                 text=text, 
-                reply_markup=get_caption_keyboard(job['original_message_id'])
+                reply_markup=get_caption_keyboard(job['original_message_id']),
+                parse_mode=ParseMode.HTML
             )
         except Exception: pass
         
-        await message.reply("✅ **Text rule added.** You can add more text to remove, or click **Start** on the menu.")
+        await message.reply("✅ <b>Text rule added.</b> You can add more text to remove, or click <b>Start</b> on the menu.", parse_mode=ParseMode.HTML)
         return
 
     if re.search(r"t\.me\/", message.text):
         LINK_CACHE[user_id] = message.text
-        await message.reply("⚙️ **How do you want to proceed?**", reply_markup=get_start_keyboard())
+        await message.reply("⚙️ <b>How do you want to proceed?</b>", reply_markup=get_start_keyboard(), parse_mode=ParseMode.HTML)
 
 @bot.on_message(filters.command("stats") & filters.private)
 async def stats(_, message: Message):
@@ -359,17 +360,18 @@ async def stats(_, message: Message):
     total, free, sent, recv, cpuUsage, memory, disk, proc_mem = await asyncio.to_thread(get_sys_stats)
     
     await message.reply(
-        "**Bot's Live and Running Successfully.**\n\n"
-        f"**Uptime:** {currentTime} | **Mem:** {proc_mem} MiB\n"
-        f"**Free Disk:** {free} of {total}\n"
-        f"**Traffic:** 🔼 {sent} | 🔽 {recv}\n"
-        f"**System:** CPU: {cpuUsage}% | RAM: {memory}% | DISK: {disk}%"
+        "<b>Bot's Live and Running Successfully.</b>\n\n"
+        f"<b>Uptime:</b> {currentTime} | <b>Mem:</b> {proc_mem} MiB\n"
+        f"<b>Free Disk:</b> {free} of {total}\n"
+        f"<b>Traffic:</b> 🔼 {sent} | 🔽 {recv}\n"
+        f"<b>System:</b> CPU: {cpuUsage}% | RAM: {memory}% | DISK: {disk}%",
+        parse_mode=ParseMode.HTML
     )
 
 @bot.on_message(filters.command("logs") & filters.private)
 async def logs(_, message: Message):
-    if os.path.exists("logs.txt"): await message.reply_document(document="logs.txt", caption="**Logs**")
-    else: await message.reply("**Not exists**")
+    if os.path.exists("logs.txt"): await message.reply_document(document="logs.txt", caption="<b>Logs</b>", parse_mode=ParseMode.HTML)
+    else: await message.reply("<b>Not exists</b>", parse_mode=ParseMode.HTML)
 
 @bot.on_message(filters.command("stop") & filters.private)
 async def cancel_all_tasks(_, message: Message):
@@ -378,7 +380,7 @@ async def cancel_all_tasks(_, message: Message):
         if not task.done():
             task.cancel()
             cancelled += 1
-    await message.reply(f"**Cancelled {cancelled} running task(s).**")
+    await message.reply(f"<b>Cancelled {cancelled} running task(s).</b>", parse_mode=ParseMode.HTML)
 
 if __name__ == "__main__":
     if os.path.exists("downloads"):

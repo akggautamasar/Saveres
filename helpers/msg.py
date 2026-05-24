@@ -1,5 +1,4 @@
 import re
-from pyrogram.parser import Parser
 from pyrogram.utils import get_channel_id
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -11,17 +10,7 @@ def clean_caption(caption: str) -> str:
     if not caption:
         return ""
 
-    def handle_markdown_links(match):
-        text = match.group(1)
-        url = match.group(2)
-        
-        if re.search(r'(?:t\.me|telegram\.me)/.+/\d+', url, re.IGNORECASE):
-            return match.group(0) 
-        else:
-            return text 
-            
-    caption = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', handle_markdown_links, caption)
-    caption = re.sub(r'@([a-zA-Z0-9_]+)', r'(at)\1', caption)
+    caption = re.sub(r'(?<!href=["\'])@([a-zA-Z0-9_]+)', r'(at)\1', caption)
     
     def defang_bare_link(match):
         url = match.group(0)
@@ -29,7 +18,7 @@ def clean_caption(caption: str) -> str:
             return url 
         return url.replace('.', '(dot)')
         
-    pattern = r'(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me|chat\.whatsapp\.com)\S+'
+    pattern = r'(?<!href=["\'])(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me|chat\.whatsapp\.com)\S+'
     caption = re.sub(pattern, defang_bare_link, caption, flags=re.IGNORECASE)
     
     return caption.strip()
@@ -41,18 +30,26 @@ def apply_caption_rules(caption: str, rules: list) -> str:
     for rule in rules:
         if rule == "keep": 
             continue
-            
-        lines = caption.split('\n')
+
+        lines = caption.replace('\r', '').split('\n')
         
         if rule == "rm_last":
             target_idx = -1
             for i in range(len(lines) - 1, -1, -1):
-                if re.search(r'[a-zA-Z0-9]', lines[i]):
+                clean_line = re.sub(r'<[^>]+>', '', lines[i])
+                if re.search(r'[a-zA-Z0-9]', clean_line):
                     target_idx = i
                     break
             
             if target_idx != -1:
-                caption = '\n'.join(lines[:target_idx]).strip()
+                kept_lines = lines[:target_idx]
+                dangling_tags = ""
+                for j in range(target_idx, len(lines)):
+                    tags = re.findall(r'</[^>]+>', lines[j])
+                    if tags:
+                        dangling_tags += "".join(tags)
+                
+                caption = '\n'.join(kept_lines).strip() + dangling_tags
             else:
                 caption = ""
 
@@ -91,8 +88,13 @@ def extract_youtube_keyboard(reply_markup) -> InlineKeyboardMarkup | None:
         return InlineKeyboardMarkup(valid_buttons)
     return None
 
-async def get_parsed_msg(text, entities):
-    return Parser.unparse(text, entities or [], is_html=False)
+async def get_parsed_msg(chat_msg):
+
+    if chat_msg.caption:
+        return chat_msg.caption.html
+    elif chat_msg.text:
+        return chat_msg.text.html
+    return ""
     
 def getChatMsgID(link: str):
     if "?" in link:

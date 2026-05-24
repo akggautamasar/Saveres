@@ -39,13 +39,12 @@ def get_progress_text(filename, file_size="Unknown Size", batch_stats=None, warn
 
     if not batch_stats:
         text = (
-            f"> 📥 **Processing**\n"
-            f">\n"
-            f"├ **File:** {filename}\n"
-            f"└ **Size:** {file_size}"
+            f"<blockquote>📥 <b>Processing</b>\n"
+            f"├ <b>File:</b> {filename}\n"
+            f"└ <b>Size:</b> {file_size}</blockquote>"
         )
         if warning:
-            text += f"\n>\n> ⚠️ **{warning}**"
+            text += f"\n<blockquote>⚠️ <b>{warning}</b></blockquote>"
         return text
 
     current = batch_stats["processed"]
@@ -54,20 +53,17 @@ def get_progress_text(filename, file_size="Unknown Size", batch_stats=None, warn
     pct = (current / total) * 100 if total > 0 else 100
     
     text = (
-        f"> 📥 **Processing**\n"
-        f">\n"
-        f"├ **File:** {filename}\n"
-        f"└ **Size:** {file_size}\n"
-        f"\n"
-        f"> 🚀 **Batch Progress: {pct:.1f}%**\n"
-        f">\n"
-        f"├ 📊 **Total Links:** {total}\n"
-        f"├ ⚡ **Current:** {current}\n"
-        f"└ ⏳ **Remaining:** {rem}"
+        f"<blockquote>📥 <b>Processing</b>\n"
+        f"├ <b>File:</b> {filename}\n"
+        f"└ <b>Size:</b> {file_size}</blockquote>\n"
+        f"<blockquote>🚀 <b>Batch Progress: {pct:.1f}%</b>\n"
+        f"├ 📊 <b>Total Links:</b> {total}\n"
+        f"├ ⚡ <b>Current:</b> {current}\n"
+        f"└ ⏳ <b>Remaining:</b> {rem}</blockquote>"
     )
     
     if warning:
-        text += f"\n>\n> ⚠️ **{warning}**"
+        text += f"\n<blockquote>⚠️ <b>{warning}</b></blockquote>"
         
     return text
 
@@ -308,9 +304,7 @@ async def download_single_media(msg, user_client, semaphore, progress_msg=None, 
                     LOGGER(__name__).warning(f"Group File size mismatch. The file reference might have expired.")
                     raise FileReferenceExpired()
 
-            parsed_caption = await get_parsed_msg(
-                msg.caption or "", msg.caption_entities
-            )
+            parsed_caption = await get_parsed_msg(msg)
             
             parsed_caption = clean_caption(parsed_caption)
             if caption_rules:
@@ -417,7 +411,7 @@ async def processMediaGroup(chat_message, user_client, bot, message, semaphore, 
         
         if not sent_success:
             await message.reply(
-                "**❌ Failed to send media group, trying individual uploads**"
+                "<b>❌ Failed to send media group, trying individual uploads</b>"
             )
             for media in valid_media:
                 try:

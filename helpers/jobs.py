@@ -64,7 +64,7 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
             if not await fileSizeLimit(file_size, message, "download", user.me.is_premium):
                 return
 
-        parsed_caption = await get_parsed_msg(chat_message.caption or "", chat_message.caption_entities)
+        parsed_caption = await get_parsed_msg(chat_message)
         parsed_caption = clean_caption(parsed_caption)
         if caption_rules:
             parsed_caption = apply_caption_rules(parsed_caption, caption_rules)
@@ -146,13 +146,13 @@ async def handle_download(bot: Client, user: Client, message: Message, post_url:
             if batch_stats:
                 batch_stats["processed"] += 1
             
-            parsed_text = await get_parsed_msg(chat_message.text or "", chat_message.entities)
+            parsed_text = await get_parsed_msg(chat_message)
             parsed_text = clean_caption(parsed_text)
             
             try:
-                await bot.send_message(chat_id=target_chat_id, message_thread_id=target_topic_id, text=parsed_text, reply_markup=safe_keyboard, disable_web_page_preview=True)
+                await bot.send_message(chat_id=target_chat_id, message_thread_id=target_topic_id, text=parsed_text, reply_markup=safe_keyboard, disable_web_page_preview=True, parse_mode=ParseMode.HTML)
             except BadRequest:
-                await bot.send_message(chat_id=target_chat_id, message_thread_id=target_topic_id, text=chat_message.text or "", reply_markup=safe_keyboard, disable_web_page_preview=True)
+                await bot.send_message(chat_id=target_chat_id, message_thread_id=target_topic_id, text=chat_message.text.html or "", reply_markup=safe_keyboard, disable_web_page_preview=True, parse_mode=ParseMode.HTML)
                 
             LOGGER(__name__).info(f"Finished Processing: {post_url}")
             
@@ -326,10 +326,9 @@ async def execute_autoforward(bot: Client, user: Client, original_msg: Message, 
                 
             try:
                 raw_text = chat_msg.caption or chat_msg.text or ""
-                entities = chat_msg.caption_entities or chat_msg.entities
                 
                 if raw_text:
-                    custom_caption = await get_parsed_msg(raw_text, entities)
+                    custom_caption = await get_parsed_msg(chat_msg)
                     custom_caption = clean_caption(custom_caption)
                     custom_caption = apply_caption_rules(custom_caption, caption_rules)
                 else:
@@ -344,7 +343,7 @@ async def execute_autoforward(bot: Client, user: Client, original_msg: Message, 
                 
                 if custom_caption: 
                     kwargs["caption"] = custom_caption
-                    kwargs["parse_mode"] = ParseMode.MARKDOWN
+                    kwargs["parse_mode"] = ParseMode.HTML
                 
                 await user.copy_message(**kwargs)
                 copied += 1

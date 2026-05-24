@@ -13,7 +13,6 @@
 - 🚀 **Custom Routing:** Option to route batch downloads directly to a target channel/group.
 - 🔍 **Media Filtering:** Grab specific media types during batch processes (e.g., only `video` or `doc`).
 - 🔄 **Live Progress:** Real-time progress tracking for single files and batch operations.
-- ⏱️ **Dynamic Rate Limiting:** Built-in sliding-window logic dynamically pauses rapid processing to avoid Telegram API FloodWaits.
 
 ## 📋 Requirements
 
@@ -30,6 +29,7 @@ You can tweak the bot's performance by adjusting `config.py`:
 - **`MAX_CONCURRENT_DOWNLOADS`**: Number of simultaneous downloads (default: `1`)
 - **`MAX_CONCURRENT_UPLOADS`**: Number of simultaneous uploads (default: `1`)
 - **`BATCH_SIZE`**: Number of posts to process in parallel during batch downloads (default: `1`)
+- **`MAX_CONCURRENT_TRANSMISSIONS`**: Number of parallel connections per transfer (default: `2`). Keep in mind, higher is not always better.
 - **`FLOOD_WAIT_DELAY`**: Delay in seconds between batch chunks to respect Telegram's API limits (default: `5`)
 
 ## 🚀 Deploy the Bot (Google Colab)
@@ -55,17 +55,13 @@ Follow these steps for a quick cloud deployment:
 
 `/help` - Show detailed instructions and command syntax.
 
-`/dl <post_URL>` (or just paste a link) - Fetch media from a single post.
+`/batch <start_link>` - Fetch a range of posts. The bot will ask if you want to send the media to the Bot Chat or a Channel/Topic.
 
-`/batch <start_link> <end_link> [filter]` - Fetch a range of posts. The bot will ask if you want to send the media to the Bot Chat or a Custom Channel.
-
-Filters available: video, doc, photo, audio, or leave blank for ALL.
-
-💡 Example: `/batch https://t.me/mychannel/100 https://t.me/mychannel/120 video`
+Filters available: Video, Photo, Audio, Doc or click ALL. You can also select multiple file types.
 
 ⚠️ Note: If routing to a custom channel, the bot must be an Administrator with 'Post Messages' rights in the target channel.
 
-`/autoforward <from_chat_link> <to_chat_link>` - Auto-forward messages bypassing the UI limits (100 messages)
+`/autoforward <from_chat_link>` - Auto-forward messages bypassing the UI limits (100 messages)
 
 `/stop` - Cancel any active tasks
 
@@ -75,12 +71,9 @@ Filters available: video, doc, photo, audio, or leave blank for ALL.
 
 🔒 Important: Your user session account MUST be a member of the source chat/channel you are trying to download from, or the bot will not be able to access the messages.
 
-🛡️ Security: To prevent spam, the bot automatically removes external URLs, t.me links, and trailing spaces from captions.
+🛡️ Security: To prevent spam, the bot automatically redacts external URLs.
 
 ## 🤝 Acknowledgment and Credits
 This project originally began utilizing the base code from [RestrictedContentDL](https://github.com/bisnuray/RestrictedContentDL) authored by Bisnu Ray.
 
-While the core concept and initial foundation were derived from their work, this repository has since undergone architectural rewrites, feature additions, and logic overhauls. It is now developed and maintained independently as a hard fork.
-
-Huge thanks to Bisnu Ray for laying down the original groundwork!
-
+While the core concept and initial foundation were derived from their work, this repository has since undergone architectural rewrites, feature additions, and logic overhauls. It is now developed and maintained independently as a hard fork. Huge thanks to Bisnu Ray for laying down the original groundwork!

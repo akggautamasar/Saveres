@@ -100,14 +100,14 @@ async def help_command(_, message: Message):
         "📥 <b>Single Posts</b>\n"
         "• Paste any restricted post link directly in the chat.\n\n"
         "📦 <b>Batch Downloads</b>\n"
-        "• Type <code>/batch &lt;start_url&gt;</code> to initiate a batch download manually.\n\n"
+        "• Type <code>/batch &lt;start_url&gt;</code> to initiate a batch download.\n\n"
         "⚡ <b>Auto-Forwarding</b>\n"
-        "<code>/autoforward &lt;from_chat_link&gt; &lt;to_chat_link&gt;</code>\n\n"
+        "• Type <code>/autoforward &lt;from_chat_link&gt;</code> to initiate autoforward process.\n\n"
         "⚙️ <b>System Controls</b>\n"
         "• <code>/stop</code> - Cancel active tasks\n"
         "• <code>/stats</code> - Check bot performance\n"
         "• <code>/logs</code> - View system logs\n\n"
-        "🔒 <b>Requirement:</b> Your user client session must be a member of the source chat."
+        "🔒 <b>Requirement:</b> You must be a member of the source chat."
     )
     await message.reply(help_text, disable_web_page_preview=True, parse_mode=ParseMode.HTML)
 
@@ -115,7 +115,7 @@ async def help_command(_, message: Message):
 async def batch_command(bot: Client, message: Message):
     args = message.text.split()
     if len(args) < 2 or not args[1].startswith("https://t.me/"):
-        return await message.reply("🚀 <b>Batch Download</b>\n<blockquote><code>/batch start_link</code></blockquote>", parse_mode=ParseMode.HTML)
+        return await message.reply("🚀 <b>Batch Download</b>\n\n<blockquote><code>/batch start_link</code></blockquote>", parse_mode=ParseMode.HTML)
     LINK_CACHE[message.from_user.id] = args[1]
     await message.reply("🔗 Send the <b>ending post link</b> to establish the range.", parse_mode=ParseMode.HTML)
     WAITING_FOR_DEST[message.from_user.id] = {"action": "wait_batch_end"}
@@ -159,9 +159,9 @@ async def filter_menu_callback(bot: Client, callback_query: CallbackQuery):
         FILTER_STATE.pop(msg_id, None)
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("Bot Chat", callback_data=f"batch_bot_{msg_id}"),
-             InlineKeyboardButton("Channel / Topic", callback_data=f"batch_chan_{msg_id}")]
+             InlineKeyboardButton("Channel/Topic", callback_data=f"batch_chan_{msg_id}")]
         ])
-        return await callback_query.message.edit_text("Where do you want to forward the media?", reply_markup=keyboard)
+        return await callback_query.message.edit_text("Where do you want to forward media?", reply_markup=keyboard)
         
     if selection == "done":
         job["filter_type"] = current_filters if current_filters else ["all"]
@@ -171,7 +171,7 @@ async def filter_menu_callback(bot: Client, callback_query: CallbackQuery):
             [InlineKeyboardButton("Bot Chat", callback_data=f"batch_bot_{msg_id}"),
              InlineKeyboardButton("Channel/Topic", callback_data=f"batch_chan_{msg_id}")]
         ])
-        return await callback_query.message.edit_text("Where do you want to forward the media?", reply_markup=keyboard)
+        return await callback_query.message.edit_text("Where do you want to forward media?", reply_markup=keyboard)
         
     if "all" in current_filters: 
         current_filters.remove("all")
@@ -204,13 +204,13 @@ async def batch_destination_callback(bot: Client, callback_query: CallbackQuery)
         await trigger_caption_setup(bot, user, callback_query.message, job, requester_id=callback_query.from_user.id)
     elif action == "chan":
         WAITING_FOR_DEST[callback_query.from_user.id] = job
-        await job["original_message"].reply("🔗 Send a post link from the target channel or topic.")
+        await job["original_message"].reply("🔗 Send a post link from the target channel/topic.")
 
 @bot.on_message(filters.command(["autoforward"]) & filters.private)
 async def auto_forward_init(bot: Client, message: Message):
     args = message.text.split()
     if len(args) < 2 or not args[1].startswith("https://t.me/"):
-        return await message.reply("🚀 <b>Auto-Forward</b>\n<blockquote><code>/autoforward &lt;start_link&gt;</code></blockquote>", parse_mode=ParseMode.HTML)
+        return await message.reply("🚀 <b>Auto-Forward</b>\n\n<blockquote><code>/autoforward &lt;start_link&gt;</code></blockquote>", parse_mode=ParseMode.HTML)
     LINK_CACHE[message.from_user.id] = args[1]
     WAITING_FOR_DEST[message.from_user.id] = {"action": "wait_auto_end"}
     await message.reply("🔗 Send the <b>ending post link</b> to establish the range.", parse_mode=ParseMode.HTML)
@@ -294,7 +294,7 @@ async def handle_any_message(bot: Client, message: Message):
                     "original_message": message
                 }
                 WAITING_FOR_DEST[message.from_user.id] = auto_job
-                await message.reply("🔗 Send a post link from the target channel or topic.")
+                await message.reply("🔗 Send a post link from the target channel/topic.")
             return
 
         try:

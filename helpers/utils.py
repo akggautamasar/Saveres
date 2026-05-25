@@ -39,9 +39,9 @@ def get_progress_text(filename, file_size="Unknown Size", batch_stats=None, warn
 
     if not batch_stats:
         text = (
-            f"<blockquote>📥 <b>Processing</b>\n"
+            f"<blockquote>📥 <b>Processing</b></blockquote>\n\n"
             f"├ <b>File:</b> {filename}\n"
-            f"└ <b>Size:</b> {file_size}</blockquote>"
+            f"└ <b>Size:</b> {file_size}"
         )
         if warning:
             text += f"\n<blockquote>⚠️ <b>{warning}</b></blockquote>"
@@ -53,13 +53,13 @@ def get_progress_text(filename, file_size="Unknown Size", batch_stats=None, warn
     pct = (current / total) * 100 if total > 0 else 100
     
     text = (
-        f"<blockquote>📥 <b>Processing</b>\n"
+        f"<blockquote>📥 <b>Processing</b></blockquote>\n"
         f"├ <b>File:</b> {filename}\n"
-        f"└ <b>Size:</b> {file_size}</blockquote>\n"
-        f"<blockquote>🚀 <b>Batch Progress: {pct:.1f}%</b>\n"
+        f"└ <b>Size:</b> {file_size}\n\n"
+        f"<blockquote>🚀 <b>Batch Progress: {pct:.1f}%</b></blockquote>\n"
         f"├ 📊 <b>Total Links:</b> {total}\n"
         f"├ ⚡ <b>Current:</b> {current}\n"
-        f"└ ⏳ <b>Remaining:</b> {rem}</blockquote>"
+        f"└ ⏳ <b>Remaining:</b> {rem}"
     )
     
     if warning:

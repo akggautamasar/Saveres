@@ -49,7 +49,6 @@ async def health(request):
 async def run_health_server():
     app = web.Application()
     app.router.add_get("/", health)
-    app.router.add_head("/", health)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", 8000))

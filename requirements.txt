@@ -1,3 +1,4 @@
 Pyrofork
 TgCrypto
 psutil
+aiohttp

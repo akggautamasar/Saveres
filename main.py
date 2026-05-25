@@ -4,6 +4,7 @@ import psutil
 import asyncio
 import re
 from time import time
+from aiohttp import web
 from pyrogram.enums import ParseMode
 from pyrogram import Client, compose, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -40,6 +41,22 @@ WAITING_FOR_DEST = {}
 WAITING_FOR_CAPTION_RULE = {}
 LINK_CACHE = {} 
 FILTER_STATE = {}
+
+# ── Health check server for Koyeb ──────────────────────────────────────────────
+async def health(request):
+    return web.Response(text="OK")
+
+async def run_health_server():
+    app = web.Application()
+    app.router.add_get("/", health)
+    app.router.add_head("/", health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 8000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    LOGGER(__name__).info(f"Health check server running on port {port}")
+# ───────────────────────────────────────────────────────────────────────────────
 
 async def trigger_caption_setup(bot: Client, user: Client, message: Message, job: dict, requester_id: int = None):
     sample_caption = ""
@@ -391,7 +408,16 @@ if __name__ == "__main__":
     os.makedirs("downloads", exist_ok=True)
 
     LOGGER(__name__).info("Bot Started!")
-    try: compose([bot, user])
-    except KeyboardInterrupt: pass
-    except Exception as e: LOGGER(__name__).error(f"Bot Crashed: {e}")
-    finally: LOGGER(__name__).info("Bot Stopped.")
+
+    async def main():
+        await run_health_server()
+        await compose([bot, user])
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        LOGGER(__name__).error(f"Bot Crashed: {e}")
+    finally:
+        LOGGER(__name__).info("Bot Stopped.")

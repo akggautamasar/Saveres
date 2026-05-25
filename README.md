@@ -7,12 +7,11 @@
 
 ## ✨ Features
 
-- 📥 **Media Extraction:** Download media from restricted chats.
-- ⚡ **Auto-Forwarding:** Auto-forward media bypassing the UI limit (100 messages).
-- ✂️ **Custom Caption:** Dynamically strip unwanted text from captions.
-- 🚀 **Custom Routing:** Option to route batch downloads directly to a target channel/group.
-- 🔍 **Media Filtering:** Grab specific media types during batch processes (e.g., only `video` or `doc`).
-- 🔄 **Live Progress:** Real-time progress tracking for single files and batch operations.
+- **Media Extraction:** Download media from restricted chats.
+- **Auto-Forwarding:** Auto-forward media bypassing the UI limit (100 messages).
+- **Custom Caption:** Dynamically strip unwanted text from captions.
+- **Custom Routing:** Option to route batch downloads directly to a target channel/group.
+- **Media Filtering:** Grab specific media types during batch processes (e.g., only `video` or `doc`).
 
 ## 📋 Requirements
 
@@ -20,8 +19,9 @@ To begin using the bot, ensure you have the following:
 
 - **Telegram Bot Token:** Get one from [@BotFather](https://t.me/BotFather).
 - **API ID and Hash:** Create an application on [my.telegram.org](https://my.telegram.org) to get these.
-  > ⚠️ **Warning**: This is an irreversible process; API ID and API Hash can only be deleted by deleting your Telegram account. Never share your credentials.
-- **Session String:** Run `session-string.py` in your environment (e.g., Colab) and follow the prompts to generate your Pyrogram session string.
+  > **Warning**: This is an irreversible process; API ID and API Hash can only be deleted by deleting your Telegram account. Never share your credentials.
+- **Session String:** Run `session-string.py` in your environment (e.g., Colab) and follow the prompts to generate your Pyrogram session string. This is used to login.
+- **Bot Permissions:** When routing to a custom channel, ensure the bot is an Administrator with 'Post Messages' rights.
 
 ## ⚙️ Configuration
 
@@ -33,8 +33,6 @@ You can tweak the bot's performance by adjusting `config.py`:
 - **`FLOOD_WAIT_DELAY`**: Delay in seconds between batch chunks to respect Telegram's API limits (default: `5`)
 
 ## 🚀 Deploy the Bot (Google Colab)
-
-Follow these steps for a quick cloud deployment:
 
 1. **Clone the repo:** `!git clone https://github.com/invinciblevenom/save-restricted-content.git`
 2. **Install dependencies:** `!pip install -r /content/save-restricted-content/requirements.txt`
@@ -49,8 +47,8 @@ Follow these steps for a quick cloud deployment:
 
  5. **Start the Bot:** `!python3 /content/save-restricted-content/main.py`
 
-
 ## 📖 Usage & Commands
+
 `/start` - Check if the bot is alive and view basic info.
 
 `/help` - Show detailed instructions and command syntax.
@@ -58,8 +56,6 @@ Follow these steps for a quick cloud deployment:
 `/batch <start_link>` - Fetch a range of posts. The bot will ask if you want to send the media to the Bot Chat or a Channel/Topic.
 
 Filters available: Video, Photo, Audio, Doc or click ALL. You can also select multiple file types.
-
-⚠️ Note: If routing to a custom channel, the bot must be an Administrator with 'Post Messages' rights in the target channel.
 
 `/autoforward <from_chat_link>` - Auto-forward messages bypassing the UI limits (100 messages)
 
@@ -69,11 +65,7 @@ Filters available: Video, Photo, Audio, Doc or click ALL. You can also select mu
 
 `/logs` - Downloads the logs.txt file
 
-🔒 Important: Your user session account MUST be a member of the source chat/channel you are trying to download from, or the bot will not be able to access the messages.
+## 🤝 Credits
+This project is a hard fork of [RestrictedContentDL](https://github.com/bisnuray/RestrictedContentDL) by Bisnu Ray. While built upon that foundation, this repository has been independently architected and maintained.
 
-🛡️ Security: To prevent spam, the bot automatically redacts external URLs.
-
-## 🤝 Acknowledgment and Credits
-This project originally began utilizing the base code from [RestrictedContentDL](https://github.com/bisnuray/RestrictedContentDL) authored by Bisnu Ray.
-
-While the core concept and initial foundation were derived from their work, this repository has since undergone architectural rewrites, feature additions, and logic overhauls. It is now developed and maintained independently as a hard fork. Huge thanks to Bisnu Ray for laying down the original groundwork!
+If you find this useful, a star is greatly appreciated. Feel free to use or share this code, with proper credits.

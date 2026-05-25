@@ -24,8 +24,9 @@ bot = Client(
     bot_token=PyroConf.BOT_TOKEN,
     workers=100,
     parse_mode=ParseMode.HTML,
-    max_concurrent_transmissions=PyroConf.MAX_CONCURRENT_TRANSMISSIONS, 
+    max_concurrent_transmissions=PyroConf.MAX_CONCURRENT_TRANSMISSIONS,
     sleep_threshold=60,
+    in_memory=True,
 )
 
 user = Client(
@@ -34,6 +35,7 @@ user = Client(
     session_string=PyroConf.SESSION_STRING,
     max_concurrent_transmissions=PyroConf.MAX_CONCURRENT_TRANSMISSIONS,
     sleep_threshold=60,
+    in_memory=True,
 )
 
 BATCH_JOBS = {}
